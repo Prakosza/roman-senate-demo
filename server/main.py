@@ -6,10 +6,11 @@ import os
 import time
 import uuid
 from typing import Any, Dict, List, Optional
+from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
 from pydantic import BaseModel, Field
 from openai import OpenAI
 
@@ -42,6 +43,7 @@ manager = DebateManager(
 )
 
 app = FastAPI(title="Roman Senate Demo", version="0.1.0")
+DEMO_HTML_PATH = Path(__file__).with_name("demo.html")
 
 
 class ChatMessage(BaseModel):
@@ -59,6 +61,11 @@ class ChatCompletionRequest(BaseModel):
 @app.get("/health")
 async def health() -> Dict[str, Any]:
     return {"ok": True}
+
+
+@app.get("/demo")
+async def demo_page():
+    return FileResponse(DEMO_HTML_PATH)
 
 
 @app.get("/v1/models")

@@ -98,12 +98,16 @@ python3 scripts/fetch_public_domain_sources.py
 docker compose up --build
 ```
 
-4. Open WebUI:
+4. Open WebUI (optional):
 - URL: `http://localhost:3000`
 - Add OpenAI-compatible connection in Open WebUI settings:
   - Base URL: `http://senate-server:8000/v1` (inside Docker network), or `http://localhost:8000/v1` depending on setup
   - API key: any non-empty dummy value (backend accepts it)
   - Model: `roman-senate`
+
+5. Minimal separate-bubble UI (recommended for strict "one turn = one bubble"):
+- URL: `http://localhost:8000/demo`
+- This tiny frontend uses the same backend API but renders each Caesar/Pompey turn as its own chat bubble.
 
 ## Demo script
 
