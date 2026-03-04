@@ -1,0 +1,29 @@
+services:
+  senate-server:
+    build: .
+    container_name: senate-server
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+      MAX_SECONDS: ${MAX_SECONDS:-180}
+      MAX_TURNS: ${MAX_TURNS:-12}
+      CHROMA_DIR: /app/chroma
+    volumes:
+      - ./data:/app/data
+      - ./chroma:/app/chroma
+    ports:
+      - "8000:8000"
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    ports:
+      - "3000:8080"
+    volumes:
+      - open-webui-data:/app/backend/data
+    depends_on:
+      - senate-server
+
+volumes:
+  open-webui-data:
