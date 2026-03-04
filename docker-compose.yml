@@ -3,17 +3,40 @@ services:
     build: .
     container_name: senate-server
     environment:
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      # Backward-compatible pass-through
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
       OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+
+      # Preferred new vars (OpenAI-compatible providers)
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+
       MAX_SECONDS: ${MAX_SECONDS:-180}
       MAX_TURNS: ${MAX_TURNS:-12}
       CHROMA_DIR: /app/chroma
+      ANONYMIZED_TELEMETRY: "FALSE"
     volumes:
       - ./data:/app/data
       - ./chroma:/app/chroma
     ports:
       - "8000:8000"
+
+  gradio-ui:
+    build: .
+    container_name: senate-gradio
+    command: ["python", "gradio_app.py"]
+    environment:
+      DEBATE_API_BASE: http://senate-server:8000/v1/chat/completions
+      DEBATE_API_KEY: dummy
+    depends_on:
+      - senate-server
+    ports:
+      - "7860:7860"
 
   open-webui:
     image: ghcr.io/open-webui/open-webui:main

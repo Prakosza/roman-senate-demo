@@ -1,49 +1,38 @@
 # roman-senate-demo
 
-Minimal demo: two independent agents (**Caesar** and **Pompey**) debate in one chat, each grounded only in its own RAG corpus.
+Minimal demo: two independent agents (**Caesar** and **Pompey**) debate turn-by-turn with separate RAG sources and separate agent memory.
 
-## Think-and-challenge checkpoint
+## Design choices (low-LOC, existing tools)
 
-- **Option A (chosen):** Open WebUI + OpenAI-compatible FastAPI backend.
-- **Option B (fallback):** Gradio UI + direct backend call.
+- **No custom frontend code** for production path.
+- **UI:** Gradio (ready-made, stable) for one-turn-per-bubble behavior.
+- **Optional UI:** Open WebUI (also ready-made), but via OpenAI-compatible API it shows one streaming assistant bubble per request.
+- **Backend:** small FastAPI OpenAI-compatible endpoint.
 
-Why A is simplest for this goal: Open WebUI gives a ready-made, pretty chat UI with almost no frontend code. We only implement one backend endpoint (`/v1/chat/completions`) and commands.
+## What it supports
 
-## What is implemented
+- `/debate start <topic>`
+- `/debate stop`
+- auto-stop by `MAX_SECONDS` and `MAX_TURNS`
+- strict agent isolation:
+  - Caesar history separate from Pompey history
+  - Caesar retrieves only from `caesar_collection`
+  - Pompey retrieves only from `pompey_collection`
 
-- OpenAI-compatible backend (`POST /v1/chat/completions`)
-- Commands:
-  - `/debate start <topic>`
-  - `/debate stop`
-- Auto-stop:
-  - `MAX_SECONDS`
-  - `MAX_TURNS`
-- Two independent agents:
-  - separate histories (`history_caesar`, `history_pompey`)
-  - separate RAG collections (`caesar_collection`, `pompey_collection`)
-  - separate source folders (`data/caesar_docs`, `data/pompey_docs`)
-- Streaming support (SSE chunks) for live-feeling output when `stream=true`
+## Model provider flexibility (external + local)
 
-## Architecture
+Both chat and embeddings are OpenAI-compatible and configurable independently:
 
-```text
-Open WebUI -> /v1/chat/completions (FastAPI)
-                       |
-                       +-> DebateManager (turn loop)
-                       |      - Caesar history
-                       |      - Pompey history
-                       |
-                       +-> RAG (ChromaDB + OpenAI embeddings)
-                              - caesar_collection <- data/caesar_docs
-                              - pompey_collection <- data/pompey_docs
-```
+- Chat: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`
+- Embeddings: `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL`
+
+This works with OpenAI and local backends (vLLM/Ollama/NIM/LM Studio) if they expose compatible endpoints.
 
 ## Repo layout
 
 ```text
 roman-senate-demo/
   server/
-    __init__.py
     main.py
     debate.py
     rag.py
@@ -53,103 +42,65 @@ roman-senate-demo/
     pompey_docs/
   scripts/
     fetch_public_domain_sources.py
+  gradio_app.py
   Dockerfile
   docker-compose.yml
   requirements.txt
-  README.md
 ```
 
 ## Legal sources policy
 
 No copyrighted books are committed.
 
-This repo includes:
-- small authored sample `.txt` snippets (safe placeholders)
-- public-domain English sources added to RAG corpora:
+Included:
+- authored placeholders (`sample_*.txt`)
+- public-domain English texts:
   - `data/caesar_docs/caesar_commentaries_pg10657_selected.txt`
   - `data/caesar_docs/appian_civil_wars_pg28334_selected.txt`
   - `data/pompey_docs/plutarch_lives_vol3_pg14140_selected.txt`
   - `data/pompey_docs/appian_civil_wars_pg28334_selected.txt`
-- optional downloader for public-domain sources:
-  - `scripts/fetch_public_domain_sources.py`
 
-You can also add your own files into:
-- `data/caesar_docs`
-- `data/pompey_docs`
-
-## Run
-
-1. Prepare env:
-
-```bash
-cp .env.example .env
-# edit .env and set OPENAI_API_KEY
-```
-
-2. (Optional) Fetch public-domain sources:
+Optional fetch script:
 
 ```bash
 python3 scripts/fetch_public_domain_sources.py
 ```
 
-3. Start stack:
+## Run
 
 ```bash
-docker compose up --build
+cp .env.example .env
+# set keys/models/base URLs as needed
+
+docker-compose up --build
 ```
 
-4. Open WebUI (optional):
-- URL: `http://localhost:3000`
-- Add OpenAI-compatible connection in Open WebUI settings:
-  - Base URL: `http://senate-server:8000/v1` (inside Docker network), or `http://localhost:8000/v1` depending on setup
-  - API key: any non-empty dummy value (backend accepts it)
-  - Model: `roman-senate`
+### UIs
 
-5. Minimal separate-bubble UI (recommended for strict "one turn = one bubble"):
-- URL: `http://localhost:8000/demo`
-- This tiny frontend uses the same backend API but renders each Caesar/Pompey turn as its own chat bubble.
+- **Gradio (recommended for separate bubbles):** `http://localhost:7860`
+- **Open WebUI (optional):** `http://localhost:3000`
+- **Backend API:** `http://localhost:8000/v1/chat/completions`
 
-## Demo script
+## Quick demo
 
-In chat:
+1. Open Gradio (`:7860`)
+2. Topic: `Rubicon legality`
+3. Click **Start debate**
+4. Verify separate Caesar/Pompey bubbles
+5. Send agenda update
+6. Click **Stop debate**
 
-```text
-/debate start Rubicon legality
+## API demo
+
+```bash
+curl -N http://localhost:8000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer dummy' \
+  -H 'X-Chat-Id: test-1' \
+  -d '{"model":"roman-senate","stream":true,"messages":[{"role":"user","content":"/debate start Rubicon legality"}]}'
 ```
 
-Then (optional moderator interventions):
+## Notes
 
-```text
-Focus on constitutional procedure only.
-Now address public safety vs legality.
-```
-
-Stop manually:
-
-```text
-/debate stop
-```
-
-## Behavior notes
-
-- During active debate, non-command user messages are treated as agenda updates.
-- Each turn is labeled `Caesar` or `Pompey`.
-- Prompt rule enforces groundedness: if support is missing, model should say `Not supported by sources.`
-- Sources are printed at end of each turn.
-
-## Acceptance checks
-
-1. Start containers, open WebUI, select endpoint/model.
-2. Put texts into both data folders.
-3. Run `/debate start Rubicon legality`.
-4. See alternating Caesar/Pompey messages.
-5. Send `/debate stop`; debate halts quickly.
-6. Auto-stop works after `MAX_SECONDS`.
-7. Caesar uses only Caesar collection, Pompey only Pompey collection.
-8. Code remains small and readable.
-
-## Simplifications (intentional)
-
-- No AutoGen dependency (direct turn loop is smaller and clearer).
-- RAG chunking is intentionally simple fixed-size chunking.
-- Streaming is chunked SSE in OpenAI-like format; not a perfect full OpenAI clone.
+- AutoGen intentionally omitted to keep code smaller and easier to run/debug.
+- RAG is intentionally simple (text files + chunking + Chroma).

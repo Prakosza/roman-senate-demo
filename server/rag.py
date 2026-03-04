@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List, Dict
 
 import chromadb
-from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
+from openai import OpenAI
 
 
 def _chunk_text(text: str, chunk_size: int = 900) -> List[str]:
@@ -19,12 +19,32 @@ def _chunk_text(text: str, chunk_size: int = 900) -> List[str]:
     return chunks
 
 
+class OpenAICompatibleEmbeddingFunction:
+    def __init__(self, model: str, api_key: str, base_url: str | None = None):
+        kwargs = {"api_key": api_key}
+        if base_url:
+            kwargs["base_url"] = base_url
+        self.client = OpenAI(**kwargs)
+        self.model = model
+
+    def __call__(self, input: List[str]) -> List[List[float]]:
+        resp = self.client.embeddings.create(model=self.model, input=input)
+        return [d.embedding for d in resp.data]
+
+
 class RAG:
-    def __init__(self, persist_dir: str, openai_api_key: str, embedding_model: str = "text-embedding-3-small"):
+    def __init__(
+        self,
+        persist_dir: str,
+        embedding_model: str,
+        embedding_api_key: str,
+        embedding_base_url: str | None = None,
+    ):
         self.client = chromadb.PersistentClient(path=persist_dir)
-        self.embedding_function = OpenAIEmbeddingFunction(
-            api_key=openai_api_key,
-            model_name=embedding_model,
+        self.embedding_function = OpenAICompatibleEmbeddingFunction(
+            model=embedding_model,
+            api_key=embedding_api_key,
+            base_url=embedding_base_url,
         )
 
     def build_or_load_index(self, collection_name: str, docs_path: str) -> None:
@@ -71,7 +91,6 @@ class RAG:
                 "source": (meta or {}).get("source", "unknown"),
             })
 
-        # If richer docs exist, demote placeholder samples.
         has_non_sample = any(not s["source"].startswith("sample_") for s in snippets)
         if has_non_sample:
             snippets = [s for s in snippets if not s["source"].startswith("sample_")]
