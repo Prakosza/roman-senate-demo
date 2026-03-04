@@ -111,8 +111,13 @@ class DebateManager:
         system_prompt = CAESAR_SYSTEM_PROMPT if speaker == "Caesar" else POMPEY_SYSTEM_PROMPT
         agent_history = state.history_caesar if speaker == "Caesar" else state.history_pompey
 
+        opponent_last_turn = ""
+        if state.turns:
+            opponent_last_turn = state.turns[-1]
+
         current_question = state.agenda or state.topic
-        snippets = self.rag.retrieve(collection, current_question, k=4)
+        retrieval_query = f"{current_question}\n\nOpponent last turn:\n{opponent_last_turn}" if opponent_last_turn else current_question
+        snippets = self.rag.retrieve(collection, retrieval_query, k=4)
         context_text = "\n\n".join(
             [f"[{i+1}] ({s['source']}) {s['text']}" for i, s in enumerate(snippets)]
         )
@@ -124,8 +129,10 @@ class DebateManager:
                 "role": "user",
                 "content": (
                     f"Debate topic: {state.topic}\n"
-                    f"Current agenda: {current_question}\n\n"
+                    f"Current agenda: {current_question}\n"
+                    f"Opponent last turn: {opponent_last_turn or 'none'}\n\n"
                     f"Retrieved snippets (ONLY usable facts):\n{context_text or 'No snippets found.'}\n\n"
+                    "Directly respond to opponent's latest argument if present. "
                     "Produce one short turn (4-8 sentences). End with a single line: "
                     f"Sources: {', '.join(source_names)}"
                 ),

@@ -60,7 +60,7 @@ class RAG:
             name=collection_name,
             embedding_function=self.embedding_function,
         )
-        result = collection.query(query_texts=[query], n_results=k)
+        result = collection.query(query_texts=[query], n_results=max(k, 8))
         docs = result.get("documents", [[]])[0]
         metas = result.get("metadatas", [[]])[0]
 
@@ -70,4 +70,10 @@ class RAG:
                 "text": doc,
                 "source": (meta or {}).get("source", "unknown"),
             })
-        return snippets
+
+        # If richer docs exist, demote placeholder samples.
+        has_non_sample = any(not s["source"].startswith("sample_") for s in snippets)
+        if has_non_sample:
+            snippets = [s for s in snippets if not s["source"].startswith("sample_")]
+
+        return snippets[:k]

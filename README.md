@@ -65,6 +65,11 @@ No copyrighted books are committed.
 
 This repo includes:
 - small authored sample `.txt` snippets (safe placeholders)
+- public-domain English sources added to RAG corpora:
+  - `data/caesar_docs/caesar_commentaries_pg10657_selected.txt`
+  - `data/caesar_docs/appian_civil_wars_pg28334_selected.txt`
+  - `data/pompey_docs/plutarch_lives_vol3_pg14140_selected.txt`
+  - `data/pompey_docs/appian_civil_wars_pg28334_selected.txt`
 - optional downloader for public-domain sources:
   - `scripts/fetch_public_domain_sources.py`
 
