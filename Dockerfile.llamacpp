@@ -1,0 +1,28 @@
+# llama.cpp server with CUDA support for DGX Spark
+# Based on NVIDIA DGX Spark Playbooks multi-agent-chatbot configuration
+FROM nvidia/cuda:12.8.1-devel-ubuntu24.04 AS build
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    cmake git build-essential curl libcurl4-openssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build llama.cpp server with CUDA
+RUN git clone https://github.com/ggml-org/llama.cpp.git /llama.cpp \
+    && cd /llama.cpp \
+    && cmake -B build \
+       -DGGML_CUDA=ON \
+       -DLLAMA_CURL=ON \
+       -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build build --config Release -j$(nproc) --target llama-server
+
+FROM nvidia/cuda:12.8.1-runtime-ubuntu24.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl libcurl4 libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
+
+EXPOSE 8000
+
+ENTRYPOINT ["llama-server"]

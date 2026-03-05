@@ -1,5 +1,12 @@
-Commentarii-style sample (authored for demo):
-Caesar argues that swift action can prevent civil collapse.
-He claims legitimacy from popular support and prior military service.
-He frames crossing a boundary as necessity under political deadlock.
-He warns that Senate paralysis can endanger the Republic.
+Authored strategic notes for the Caesar camp (demo fallback, English):
+
+1. Caesar frames rapid action as a way to prevent institutional collapse.
+2. He argues that tribunes and allied communities required immediate protection.
+3. He claims repeated negotiation attempts failed before escalation.
+4. He presents command continuity as necessary for veterans and provincial stability.
+5. He links legitimacy to performance: order, supply, and disciplined command.
+6. He pairs clemency rhetoric with coercive leverage to split opponents.
+7. He treats propaganda as strategy: letters and public decrees shape defections.
+8. He argues that civil-war blame lies with factions that block compromise.
+9. He presents reform as restoration of republican function, not abolition.
+10. If evidence is weak, state: Not supported by sources.

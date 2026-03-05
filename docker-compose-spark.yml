@@ -1,0 +1,139 @@
+# ── DGX Spark local model serving ─────────────────────────────────────
+# This overlay adds llama.cpp-served LLM and embedding models matching
+# the NVIDIA DGX Spark Playbooks "multi-agent-chatbot" configuration.
+#
+# Models used (from the playbook):
+#   LLM:       gpt-oss-120b  (MXFP4 GGUF, ~63 GB)  — or gpt-oss-20b (~11 GB)
+#   Embedding: Qwen3-Embedding-4B (Q8 GGUF, ~4 GB)
+#
+# Usage:
+#   # 1. Download model files (see model_download.sh or manually):
+#   #    mkdir -p models && cd models
+#   #    huggingface-cli download nvidia/gpt-oss-120b-MXFP4-GGUF  --include "*.gguf" --local-dir .
+#   #    huggingface-cli download Qwen/Qwen3-Embedding-4B-GGUF    --include "*Q8_0.gguf" --local-dir .
+#   #
+#   # 2. Start everything:
+#   docker compose -f docker-compose.yml -f docker-compose-spark.yml up -d --build
+#
+# The senate-server and gradio-ui from the base docker-compose.yml will
+# automatically connect to the local model containers via the env vars below.
+# ──────────────────────────────────────────────────────────────────────
+
+x-build-llamacpp: &build-llamacpp
+  build:
+    context: .
+    dockerfile: Dockerfile.llamacpp
+  image: local/llama.cpp:server-cuda
+
+services:
+  # ── Chat LLM: GPT-OSS-120B (default) ──────────────────────────────
+  # Requires ~64 GB VRAM.  For smaller setups, comment this out and
+  # uncomment the gpt-oss-20b block below.
+  gpt-oss-120b:
+    <<: *build-llamacpp
+    container_name: gpt-oss-120b
+    volumes:
+      - ./models:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    command:
+      - "-m"
+      - "/models/gpt-oss-120b-mxfp4-00001-of-00003.gguf"
+      - "--port"
+      - "8000"
+      - "--host"
+      - "0.0.0.0"
+      - "-n"
+      - "65536"
+      - "--n-gpu-layers"
+      - "70"
+      - "--jinja"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  # ── Chat LLM: GPT-OSS-20B (lighter alternative) ───────────────────
+  # Uncomment this and comment the 120B block above to use ~11 GB instead.
+  # gpt-oss-20b:
+  #   <<: *build-llamacpp
+  #   container_name: gpt-oss-20b
+  #   volumes:
+  #     - ./models:/models
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: all
+  #             capabilities: [gpu]
+  #   command:
+  #     - "-m"
+  #     - "/models/gpt-oss-20b-mxfp4.gguf"
+  #     - "--port"
+  #     - "8000"
+  #     - "--host"
+  #     - "0.0.0.0"
+  #     - "-n"
+  #     - "2048"
+  #     - "--n-gpu-layers"
+  #     - "999"
+  #     - "--jinja"
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 5
+  #     start_period: 60s
+
+  # ── Embedding model: Qwen3-Embedding-4B ────────────────────────────
+  qwen3-embedding:
+    <<: *build-llamacpp
+    container_name: qwen3-embedding
+    volumes:
+      - ./models:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    command:
+      - "-m"
+      - "/models/Qwen3-Embedding-4B-Q8_0.gguf"
+      - "--port"
+      - "8000"
+      - "--host"
+      - "0.0.0.0"
+      - "--jinja"
+      - "--embeddings"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # ── Override senate-server to point at local model containers ──────
+  senate-server:
+    environment:
+      LLM_API_KEY: "not-needed"
+      LLM_BASE_URL: http://gpt-oss-120b:8000/v1
+      LLM_MODEL: gpt-oss-120b
+      LLM_TEMPERATURE: "0.7"
+      EMBEDDING_API_KEY: "not-needed"
+      EMBEDDING_BASE_URL: http://qwen3-embedding:8000/v1
+      EMBEDDING_MODEL: Qwen3-Embedding-4B
+    depends_on:
+      gpt-oss-120b:
+        condition: service_healthy
+      qwen3-embedding:
+        condition: service_healthy

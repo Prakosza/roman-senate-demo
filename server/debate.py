@@ -1,29 +1,55 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from pathlib import Path
 
 from openai import OpenAI
+from openai.types.chat import ChatCompletionMessageParam
 
 from .prompts import CAESAR_SYSTEM_PROMPT, POMPEY_SYSTEM_PROMPT
 from .rag import RAG
 
+LOG_DIR = Path(os.getenv("DEBATE_LOG_DIR", "./logs"))
+LOG_PATH = LOG_DIR / "debate.log"
+
+# (speaker name, chroma collection, system prompt)
+SPEAKERS = [
+    ("Caesar", "caesar_collection", CAESAR_SYSTEM_PROMPT),
+    ("Pompey", "pompey_collection", POMPEY_SYSTEM_PROMPT),
+]
+
+
+def _make_debate_logger(topic: str) -> logging.Logger:
+    """Create (or reset) the debate log file."""
+    LOG_DIR.mkdir(exist_ok=True)
+    logger = logging.getLogger("debate")
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = False
+    # Remove old handlers, start fresh file
+    for h in logger.handlers[:]:
+        logger.removeHandler(h)
+        h.close()
+    fh = logging.FileHandler(LOG_PATH, mode="w", encoding="utf-8")
+    fh.setFormatter(logging.Formatter("%(asctime)s  %(message)s", datefmt="%H:%M:%S"))
+    logger.addHandler(fh)
+    logger.info("DEBATE START  topic=%s", topic)
+    return logger
+
 
 @dataclass
 class DebateState:
-    conversation_id: str
     topic: str
     started_at: float
+    log: logging.Logger
     stop_requested: bool = False
     active: bool = True
-    turns: List[str] = field(default_factory=list)
-    history_caesar: List[dict] = field(default_factory=list)
-    history_pompey: List[dict] = field(default_factory=list)
-    agenda: Optional[str] = None
-    queue: Optional[asyncio.Queue] = None
-    worker: Optional[asyncio.Task] = None
+    turns: list[tuple[str, str]] = field(default_factory=list)  # (speaker, text)
+    queue: asyncio.Queue | None = None
+    worker: asyncio.Task | None = None
 
 
 class DebateManager:
@@ -32,119 +58,159 @@ class DebateManager:
         rag: RAG,
         openai_client: OpenAI,
         model: str,
-        max_seconds: int = 180,
-        max_turns: int = 12,
-        turn_delay_seconds: float = 0.6,
+        max_turns: int = 30,
+        turn_delay: float = 0.5,
     ):
         self.rag = rag
-        self.openai_client = openai_client
+        self.client = openai_client
         self.model = model
-        self.max_seconds = max_seconds
         self.max_turns = max_turns
-        self.turn_delay_seconds = turn_delay_seconds
-        self.states: Dict[str, DebateState] = {}
+        self.turn_delay = turn_delay
+        self.retrieval_k = int(os.getenv("RAG_RETRIEVAL_K", "14"))
+        # Only pass temperature if explicitly set (reasoning models reject it)
+        _t = os.getenv("LLM_TEMPERATURE", "")
+        self._extra_kwargs: dict = {"temperature": float(_t)} if _t else {}
+        self.states: dict[str, DebateState] = {}
 
-    def is_active(self, conversation_id: str) -> bool:
-        state = self.states.get(conversation_id)
-        return bool(state and state.active)
+    def is_active(self, cid: str) -> bool:
+        s = self.states.get(cid)
+        return bool(s and s.active)
 
-    def get_state(self, conversation_id: str) -> Optional[DebateState]:
-        return self.states.get(conversation_id)
+    def get_state(self, cid: str) -> DebateState | None:
+        return self.states.get(cid)
 
-    async def start_debate(self, conversation_id: str, topic: str) -> DebateState:
-        existing = self.states.get(conversation_id)
-        if existing and existing.active:
-            existing.stop_requested = True
-            if existing.worker:
-                await asyncio.sleep(0.1)
+    async def start_debate(self, cid: str, topic: str) -> DebateState:
+        old = self.states.get(cid)
+        if old and old.active:
+            old.stop_requested = True
+            await asyncio.sleep(0.1)
 
-        queue: asyncio.Queue = asyncio.Queue()
         state = DebateState(
-            conversation_id=conversation_id,
-            topic=topic,
-            started_at=time.time(),
-            queue=queue,
+            topic=topic, started_at=time.time(),
+            log=_make_debate_logger(topic), queue=asyncio.Queue(),
         )
-        self.states[conversation_id] = state
-        state.worker = asyncio.create_task(self.debate_worker(conversation_id))
+        self.states[cid] = state
+        state.worker = asyncio.create_task(self._run_debate(state))
         return state
 
-    def stop_debate(self, conversation_id: str) -> bool:
-        state = self.states.get(conversation_id)
-        if not state or not state.active:
+    def stop_debate(self, cid: str) -> bool:
+        s = self.states.get(cid)
+        if not s or not s.active:
             return False
-        state.stop_requested = True
+        s.stop_requested = True
         return True
 
-    def update_agenda(self, conversation_id: str, agenda: str) -> bool:
-        state = self.states.get(conversation_id)
-        if not state or not state.active:
-            return False
-        state.agenda = agenda
-        return True
+    # ── debate loop ──────────────────────────────────────────────
 
-    async def debate_worker(self, conversation_id: str) -> None:
-        state = self.states[conversation_id]
-        speakers = ["Caesar", "Pompey"]
-
-        for turn_index in range(self.max_turns):
-            if state.stop_requested:
-                break
-            if (time.time() - state.started_at) > self.max_seconds:
-                break
-
-            speaker = speakers[turn_index % 2]
-            text = self._generate_turn(state, speaker)
-            line = f"**{speaker}:** {text}"
-            state.turns.append(line)
+    async def _run_debate(self, state: DebateState) -> None:
+        loop = asyncio.get_running_loop()
+        try:
+            for i in range(self.max_turns):
+                if state.stop_requested:
+                    break
+                name, collection, system = SPEAKERS[i % 2]
+                text = await asyncio.to_thread(
+                    self._generate_turn, state, name, collection, system, loop,
+                )
+                state.turns.append((name, text))
+                await asyncio.sleep(self.turn_delay)
+        except Exception as exc:
             if state.queue:
-                await state.queue.put(line)
+                await state.queue.put(f"[ERROR] {exc}")
+        finally:
+            state.active = False
+            state.log.info("DEBATE END  turns=%d  elapsed=%.1fs", len(state.turns), time.time() - state.started_at)
+            if state.queue:
+                await state.queue.put("[DEBATE_DONE]")
 
-            await asyncio.sleep(self.turn_delay_seconds)
+    # ── single turn generation ───────────────────────────────────
 
-        state.active = False
-        if state.queue:
-            await state.queue.put("[DEBATE_DONE]")
-
-    def _generate_turn(self, state: DebateState, speaker: str) -> str:
-        collection = "caesar_collection" if speaker == "Caesar" else "pompey_collection"
-        system_prompt = CAESAR_SYSTEM_PROMPT if speaker == "Caesar" else POMPEY_SYSTEM_PROMPT
-        agent_history = state.history_caesar if speaker == "Caesar" else state.history_pompey
-
-        opponent_last_turn = ""
+    def _generate_turn(
+        self,
+        state: DebateState,
+        speaker: str,
+        collection: str,
+        system_prompt: str,
+        loop: asyncio.AbstractEventLoop,
+    ) -> str:
+        # Retrieve relevant snippets — structured query, truncated for embedding quality
         if state.turns:
-            opponent_last_turn = state.turns[-1]
+            last = state.turns[-1][1][:200].rsplit(" ", 1)[0] + "…"
+            query = f"Topic: {state.topic}\nOpponent's last point we need to rebuttal: {last}"
+        else:
+            query = f"Topic: {state.topic}"
+        snippets = self.rag.retrieve(collection, query, k=self.retrieval_k)
 
-        current_question = state.agenda or state.topic
-        retrieval_query = f"{current_question}\n\nOpponent last turn:\n{opponent_last_turn}" if opponent_last_turn else current_question
-        snippets = self.rag.retrieve(collection, retrieval_query, k=4)
-        context_text = "\n\n".join(
-            [f"[{i+1}] ({s['source']}) {s['text']}" for i, s in enumerate(snippets)]
+        snippet_block = "\n".join(
+            f'<snippet id="{i+1}" source="{s["source"]}">{s["text"]}</snippet>'
+            for i, s in enumerate(snippets)
         )
-        source_names = sorted(set(s["source"] for s in snippets)) or ["none"]
 
-        messages = [
+        # Build messages: system → context → instructions → conversation history
+        messages: list[ChatCompletionMessageParam] = [
             {"role": "system", "content": system_prompt},
             {
-                "role": "user",
+                "role": "system",
                 "content": (
-                    f"Debate topic: {state.topic}\n"
-                    f"Current agenda: {current_question}\n"
-                    f"Opponent last turn: {opponent_last_turn or 'none'}\n\n"
-                    f"Retrieved snippets (ONLY usable facts):\n{context_text or 'No snippets found.'}\n\n"
-                    "Directly respond to opponent's latest argument if present. "
-                    "Produce one short turn (4-8 sentences). End with a single line: "
-                    f"Sources: {', '.join(source_names)}"
+                    "<snippets>\n"
+                    + (snippet_block or "<empty/>")
+                    + "\n</snippets>\n"
+                    "Cite as [1], [2] etc. when a snippet supports a factual claim."
                 ),
             },
-        ] + agent_history[-6:]
+            {
+                "role": "system",
+                "content": (
+                    f"Debate topic: {state.topic}\n\n"
+                    "INSTRUCTIONS:\n"
+                    "- Your response MUST be about the debate topic above.\n"
+                    "- Speak in first person as this Roman statesman.\n"
+                    "- Sentence 1: directly rebut the opponent's latest claim.\n"
+                    "- Then 3-7 more sentences: your strongest argument.\n"
+                    "- Be forceful, adversarial, and in character.\n"
+                    "- Do NOT repeat arguments already made.\n"
+                    "- If no snippets are relevant, argue from character knowledge.\n"
+                    "- Do not invent precise facts.\n"
+                    "- If you cited snippets, end with: Sources: filename.txt [1][3], other.txt [2]."
+                ),
+            },
+        ]
 
-        completion = self.openai_client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            temperature=0.7,
+        # Replay past turns as alternating user/assistant messages.
+        # Own turns → assistant, opponent turns → user.
+        # Keep only last 40 turns to limit context length.
+        recent_turns = state.turns[-40:] if len(state.turns) > 40 else state.turns
+        for name, text in recent_turns:
+            if name == speaker:
+                messages.append({"role": "assistant", "content": text})
+            else:
+                messages.append({"role": "user", "content": text})
+
+        # Signal turn start
+        if state.queue:
+            loop.call_soon_threadsafe(state.queue.put_nowait, f"[START:{speaker}]")
+
+        stream = self.client.chat.completions.create(
+            model=self.model, messages=messages, stream=True, **self._extra_kwargs,
         )
-        content = completion.choices[0].message.content or "Not supported by sources.\nSources: none"
+        parts: list[str] = []
+        for chunk in stream:
+            token = chunk.choices[0].delta.content or ""
+            if token:
+                parts.append(token)
+                if state.queue:
+                    loop.call_soon_threadsafe(state.queue.put_nowait, token)
 
-        agent_history.append({"role": "assistant", "content": content})
-        return content
+        response = "".join(parts) or "Not supported by sources."
+
+        # Log this turn: retrieved chunks + generated response
+        turn_num = len(state.turns) + 1
+        state.log.info("── TURN %d: %s ──", turn_num, speaker)
+        for i, s in enumerate(snippets):
+            state.log.info("  chunk[%d] (%s):\n%s", i + 1, s["source"], s["text"])
+        state.log.info("  RESPONSE: %s", response)
+
+        if state.queue:
+            loop.call_soon_threadsafe(state.queue.put_nowait, "[END_TURN]")
+
+        return response

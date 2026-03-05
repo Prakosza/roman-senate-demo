@@ -1,5 +1,12 @@
-Roman constitutional sample (authored for demo):
-Senatorial legitimacy rests on procedure, precedent, and magistrate duties.
-Debates about imperium and provincial command often hinged on timing.
-Competing legal interpretations created crises when trust was low.
-Public safety arguments were often used by both sides.
+Authored Roman constitutional notes (demo fallback, English):
+
+1. Senatorial legitimacy depends on procedure, precedent, and public accountability.
+2. Imperium was bounded by office, geography, and time.
+3. Provincial command extensions were legal flashpoints in late-republic politics.
+4. Tribunician protections and emergency decrees were frequently contested.
+5. Elections under armed pressure were widely viewed as suspect.
+6. Debt, land settlement, and veteran obligations shaped legal conflict.
+7. Appeals to mos maiorum were influential but selectively interpreted.
+8. Lasting settlement required legal form and enforceable order.
+9. Both factions used public safety arguments to justify exceptional measures.
+10. If evidence is weak, state: Not supported by sources.

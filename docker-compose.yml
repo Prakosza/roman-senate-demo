@@ -3,23 +3,30 @@ services:
     build: .
     container_name: senate-server
     environment:
-      # Backward-compatible pass-through
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
-      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
-
-      # Preferred new vars (OpenAI-compatible providers)
+      # Provider-agnostic config (works with OpenAI, vLLM, Ollama, NIM, etc.)
+      # For local models set *_BASE_URL and leave *_API_KEY empty.
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_BASE_URL: ${LLM_BASE_URL:-}
-      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+      LLM_MODEL: ${LLM_MODEL:?Set LLM_MODEL in .env}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-}
       EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
       EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
-      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:?Set EMBEDDING_MODEL in .env}
 
-      MAX_SECONDS: ${MAX_SECONDS:-180}
-      MAX_TURNS: ${MAX_TURNS:-12}
+      MAX_TURNS: ${MAX_TURNS:-30}
+      RAG_RETRIEVAL_K: ${RAG_RETRIEVAL_K:-14}
+      RAG_MAX_SNIPPETS_PER_SOURCE: ${RAG_MAX_SNIPPETS_PER_SOURCE:-4}
+      RAG_MIN_CHUNK_CHARS: ${RAG_MIN_CHUNK_CHARS:-120}
+      RAG_MAX_DISTANCE: ${RAG_MAX_DISTANCE:-1.45}
+      RAG_EMBED_BATCH_SIZE: ${RAG_EMBED_BATCH_SIZE:-100}
       CHROMA_DIR: /app/chroma
       ANONYMIZED_TELEMETRY: "FALSE"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
     volumes:
       - ./data:/app/data
       - ./chroma:/app/chroma
@@ -34,19 +41,7 @@ services:
       DEBATE_API_BASE: http://senate-server:8000/v1/chat/completions
       DEBATE_API_KEY: dummy
     depends_on:
-      - senate-server
+      senate-server:
+        condition: service_healthy
     ports:
       - "7860:7860"
-
-  open-webui:
-    image: ghcr.io/open-webui/open-webui:main
-    container_name: open-webui
-    ports:
-      - "3000:8080"
-    volumes:
-      - open-webui-data:/app/backend/data
-    depends_on:
-      - senate-server
-
-volumes:
-  open-webui-data:

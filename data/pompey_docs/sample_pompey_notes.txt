@@ -1,5 +1,12 @@
-Pompeian-style sample (authored for demo):
-Pompey argues that constitutional order depends on legal process.
-He claims military pressure on civic institutions is illegitimate.
-He presents Caesar's unilateral moves as a threat to republican norms.
-He argues that emergency powers must remain temporary and accountable.
+Authored strategic notes for the Pompey camp (demo fallback, English):
+
+1. Pompey defends constitutional process, regular magistracies, and term limits.
+2. He treats military pressure on civic institutions as illegitimate.
+3. He argues that precedent matters because exceptions become future norms.
+4. He frames emergency powers as temporary, narrow, and reviewable.
+5. He claims durable peace requires lawful procedure, not settlement under duress.
+6. He prioritizes coalition governance and Senate-backed legitimacy.
+7. He emphasizes logistics and finance as legal order in practice.
+8. He distinguishes tactical withdrawal from strategic failure.
+9. He warns that clemency language can mask permanent power concentration.
+10. If evidence is weak, state: Not supported by sources.
