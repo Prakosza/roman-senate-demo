@@ -3,7 +3,7 @@
 Minimal demo: two independent agents (**Caesar** and **Pompey**) debate turn-by-turn with separate RAG sources and separate agent memory.
 RAG is used for grounding factual claims, while tone and argument style stay in-character (Roman statesmen, not modern historians).
 
-## Design choices (low-LOC, existing tools)
+## Design choices
 
 - **No custom frontend code** for production path.
 - **UI:** Gradio (ready-made, stable) for one-turn-per-bubble behavior.
