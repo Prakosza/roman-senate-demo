@@ -161,8 +161,7 @@ Delete the `chroma/` directory to force a full re-index after corpus or embeddin
 
 ### UIs
 
-- **Gradio (recommended for separate bubbles):** `http://localhost:7860`
-- **Open WebUI (optional):** `http://localhost:3000`
+- **Gradio:** `http://localhost:7860`
 - **Backend API:** `http://localhost:8000/v1/chat/completions`
 
 ## Quick demo
@@ -186,6 +185,4 @@ curl -N http://localhost:8000/v1/chat/completions \
 
 ## Notes
 
-- AutoGen intentionally omitted to keep code smaller and easier to run/debug.
 - RAG is intentionally simple (text files + recursive text splitting + Chroma).
-- Chroma collections are rebuilt on startup to avoid stale indexes after model or corpus changes.
