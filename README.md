@@ -7,7 +7,6 @@ RAG is used for grounding factual claims, while tone and argument style stay in-
 
 - **No custom frontend code** for production path.
 - **UI:** Gradio (ready-made, stable) for one-turn-per-bubble behavior.
-- **Optional UI:** Open WebUI (also ready-made), but via OpenAI-compatible API it shows one streaming assistant bubble per request.
 - **Backend:** small FastAPI OpenAI-compatible endpoint.
 
 ## What it supports
