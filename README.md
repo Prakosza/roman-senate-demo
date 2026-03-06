@@ -86,11 +86,27 @@ Optional RAG tuning env vars:
 - `RAG_MAX_DISTANCE` (L² distance cutoff for relevance filtering, default `1.45`)
 - `RAG_EMBED_BATCH_SIZE` (chunks per embedding API call during indexing, default `100`)
 
-## Prompt contract (short)
+## Prompt architecture
+
+System prompt is structured with XML tags following
+[Anthropic's prompting best practices](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices):
+
+```xml
+<role>        Character identity and historical background      </role>
+<character>   How this senator thinks, argues, and speaks        </character>
+<topic_handling>  When to use biography vs. engage the topic     </topic_handling>
+<debate_rules>    Numbered rules: voice, structure, citations    </debate_rules>
+
+<debate_topic>  Injected per-debate (the only variable part)     </debate_topic>
+```
+
+All debate rules live in `prompts.py` — no duplication in `debate.py`.
+
+### Prompt contract (short)
 
 - Speak in first person as Caesar/Pompey.
-- First sentence: direct rebuttal to the previous turn.
-- Retrieved documents are injected in the user turn as structured XML:
+- First sentence: direct rebuttal to the previous turn, then 3-7 sentences advancing own argument.
+- Retrieved documents are injected in the **user turn** as structured XML:
   ```xml
   <documents>
     <document index="1">

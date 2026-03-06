@@ -156,26 +156,13 @@ class DebateManager:
 
         # Build messages: single system prompt → conversation history → user
         # turn with RAG context (following Anthropic's recommended placement).
+        # All debate rules live in prompts.py (no duplication here).
         messages: list[ChatCompletionMessageParam] = [
             {
                 "role": "system",
                 "content": (
                     f"{system_prompt}\n\n"
-                    f"Debate topic: {state.topic}\n\n"
-                    "INSTRUCTIONS:\n"
-                    "- EVERY sentence you write must serve the debate topic above.\n"
-                    "- Speak in first person as this Roman statesman.\n"
-                    "- Open by engaging with what the opponent just said —\n"
-                    "  challenge it, dismiss it, turn it against them.\n"
-                    "- Then 3-7 more sentences: your strongest argument ON THE TOPIC.\n"
-                    "- Be forceful, adversarial, and in character.\n"
-                    "- Do NOT repeat arguments already made in earlier turns.\n"
-                    "- Do NOT drift to the Rubicon, civil war, or legality unless\n"
-                    "  that IS the debate topic. A brief personal anecdote is fine,\n"
-                    "  but immediately return to the topic.\n"
-                    "- If no documents are relevant, argue from character knowledge.\n"
-                    "- Do not invent precise facts.\n"
-                    "- If you cited documents, end with: Sources: filename.txt [1][3], other.txt [2]."
+                    f"<debate_topic>{state.topic}</debate_topic>"
                 ),
             },
         ]
