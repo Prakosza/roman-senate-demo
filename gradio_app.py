@@ -420,7 +420,7 @@ with gr.Blocks(
     gr.HTML('<div id="senate-footer">Powered by RAG-augmented agents · Each senator retrieves only from their own historical sources</div>')
 
     # Wire events
-    start_btn.click(
+    start_event = start_btn.click(
         start,
         inputs=[topic, chatbot, chat_id],
         outputs=[chatbot, chat_id, start_btn, stop_btn],
@@ -429,10 +429,12 @@ with gr.Blocks(
         stop,
         inputs=[chatbot, chat_id],
         outputs=[chatbot, chat_id, start_btn, stop_btn],
+        cancels=[start_event],
     )
     clear_btn.click(
         clear_history,
         outputs=[chatbot, chat_id, start_btn, stop_btn],
+        cancels=[start_event],
     )
 
 

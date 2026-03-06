@@ -217,12 +217,17 @@ class DebateManager:
             model=self.model, messages=messages, stream=True, **self._extra_kwargs,
         )
         parts: list[str] = []
-        for chunk in stream:
-            token = chunk.choices[0].delta.content or ""
-            if token:
-                parts.append(token)
-                if state.queue:
-                    loop.call_soon_threadsafe(state.queue.put_nowait, token)
+        try:
+            for chunk in stream:
+                if state.stop_requested:
+                    break
+                token = chunk.choices[0].delta.content or ""
+                if token:
+                    parts.append(token)
+                    if state.queue:
+                        loop.call_soon_threadsafe(state.queue.put_nowait, token)
+        finally:
+            stream.close()
 
         response = "".join(parts) or "Not supported by sources."
 
