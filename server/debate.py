@@ -133,7 +133,7 @@ class DebateManager:
         system_prompt: str,
         loop: asyncio.AbstractEventLoop,
     ) -> str:
-        # Retrieve relevant snippets — structured query, truncated for embedding quality
+        # Retrieve relevant documents — structured query, truncated for embedding quality
         if state.turns:
             last = state.turns[-1][1][:200].rsplit(" ", 1)[0] + "…"
             query = f"Topic: {state.topic}\nOpponent's last point we need to rebuttal: {last}"
@@ -141,26 +141,26 @@ class DebateManager:
             query = f"Topic: {state.topic}"
         snippets = self.rag.retrieve(collection, query, k=self.retrieval_k)
 
-        snippet_block = "\n".join(
-            f'<snippet id="{i+1}" source="{s["source"]}">{s["text"]}</snippet>'
-            for i, s in enumerate(snippets)
-        )
+        # Build document block (Anthropic RAG pattern: documents in user turn)
+        if snippets:
+            doc_lines = ["<documents>"]
+            for i, s in enumerate(snippets):
+                doc_lines.append(f'  <document index="{i+1}">')
+                doc_lines.append(f"    <source>{s['source']}</source>")
+                doc_lines.append(f"    <document_content>{s['text']}</document_content>")
+                doc_lines.append("  </document>")
+            doc_lines.append("</documents>")
+            doc_block = "\n".join(doc_lines)
+        else:
+            doc_block = "<documents>\n  <empty/>\n</documents>"
 
-        # Build messages: system → context → instructions → conversation history
+        # Build messages: single system prompt → conversation history → user
+        # turn with RAG context (following Anthropic's recommended placement).
         messages: list[ChatCompletionMessageParam] = [
-            {"role": "system", "content": system_prompt},
             {
                 "role": "system",
                 "content": (
-                    "<snippets>\n"
-                    + (snippet_block or "<empty/>")
-                    + "\n</snippets>\n"
-                    "Cite as [1], [2] etc. when a snippet supports a factual claim."
-                ),
-            },
-            {
-                "role": "system",
-                "content": (
+                    f"{system_prompt}\n\n"
                     f"Debate topic: {state.topic}\n\n"
                     "INSTRUCTIONS:\n"
                     "- EVERY sentence you write must serve the debate topic above.\n"
@@ -173,9 +173,9 @@ class DebateManager:
                     "- Do NOT drift to the Rubicon, civil war, or legality unless\n"
                     "  that IS the debate topic. A brief personal anecdote is fine,\n"
                     "  but immediately return to the topic.\n"
-                    "- If no snippets are relevant, argue from character knowledge.\n"
+                    "- If no documents are relevant, argue from character knowledge.\n"
                     "- Do not invent precise facts.\n"
-                    "- If you cited snippets, end with: Sources: filename.txt [1][3], other.txt [2]."
+                    "- If you cited documents, end with: Sources: filename.txt [1][3], other.txt [2]."
                 ),
             },
         ]
@@ -189,6 +189,25 @@ class DebateManager:
                 messages.append({"role": "assistant", "content": text})
             else:
                 messages.append({"role": "user", "content": text})
+
+        # Final user message: RAG context + turn instruction (Anthropic pattern:
+        # documents at top, query/instruction at bottom).
+        if state.turns:
+            opponent = "Pompey" if speaker == "Caesar" else "Caesar"
+            context_instruction = (
+                f"{doc_block}\n\n"
+                "Above are retrieved historical sources for this turn. "
+                "Cite relevant documents as [1], [2] etc. for concrete factual claims. "
+                f"Now respond to {opponent}'s latest argument."
+            )
+        else:
+            context_instruction = (
+                f"{doc_block}\n\n"
+                "Above are retrieved historical sources for this turn. "
+                "Cite relevant documents as [1], [2] etc. for concrete factual claims. "
+                f"Open the debate on: {state.topic}"
+            )
+        messages.append({"role": "user", "content": context_instruction})
 
         # Signal turn start
         if state.queue:

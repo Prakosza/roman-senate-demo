@@ -30,12 +30,15 @@ RAG is used for grounding factual claims, while tone and argument style stay in-
 - retrieval diversity guardrails:
   - over-fetch k×2 candidates + deduplicate before final selection
   - distance-based filtering (`RAG_MAX_DISTANCE`, default 1.45) to drop low-relevance chunks
-  - cap repeated snippets from one source per turn (`RAG_MAX_SNIPPETS_PER_SOURCE`)
-- XML-tagged snippet injection (`<snippet id="1" source="...">...</snippet>`)
+  - cap repeated documents from one source per turn (`RAG_MAX_SNIPPETS_PER_SOURCE`)
+- RAG context placement follows [Anthropic's recommended pattern](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices#long-context-prompting):
+  - retrieved documents are injected in the **user turn** (not system), using structured XML (`<documents>` → `<document index="N">` → `<source>` + `<document_content>`)
+  - documents appear at the top of the user message, with the query/instruction below — matching the "longform data first, query last" guideline
+  - single merged system prompt (character + topic + instructions) stays stable across turns
 - conversation history capped to last 40 turns to limit context length
 - response grounding:
-  - citations use snippet ids inline (e.g. `[1]`, `[2][5]`)
-  - Sources line groups cited ids by file: `Sources: filename.txt [1][3], other.txt [2].`
+  - citations use document indices inline (e.g. `[1]`, `[2][5]`)
+  - Sources line groups cited indices by file: `Sources: filename.txt [1][3], other.txt [2].`
   - rhetorical/strategic statements can be uncited
   - unsupported concrete claims should be stated as `Not supported by sources.`
 
@@ -77,7 +80,7 @@ docker-compose up --build   # or: ./run.sh
 Also works with **vLLM**, **Ollama** (`http://localhost:11434/v1`), **LM Studio**, **text-embeddings-inference**, etc.
 
 Optional RAG tuning env vars:
-- `RAG_RETRIEVAL_K` (snippets per turn, default `14`)
+- `RAG_RETRIEVAL_K` (documents per turn, default `14`)
 - `RAG_MAX_SNIPPETS_PER_SOURCE` (cap per source in one turn, default `4`)
 - `RAG_MIN_CHUNK_CHARS` (skip tiny chunks, default `120`)
 - `RAG_MAX_DISTANCE` (L² distance cutoff for relevance filtering, default `1.45`)
@@ -87,8 +90,16 @@ Optional RAG tuning env vars:
 
 - Speak in first person as Caesar/Pompey.
 - First sentence: direct rebuttal to the previous turn.
-- Snippets are injected as XML: `<snippet id="1" source="filename.txt">text</snippet>`.
-- Cite snippet ids inline for concrete factual/legal claims (e.g. `[1]`, `[2][5]`).
+- Retrieved documents are injected in the user turn as structured XML:
+  ```xml
+  <documents>
+    <document index="1">
+      <source>filename.txt</source>
+      <document_content>text</document_content>
+    </document>
+  </documents>
+  ```
+- Cite document indices inline for concrete factual/legal claims (e.g. `[1]`, `[2][5]`).
 - If a concrete claim lacks support: `Not supported by sources.`
 - End with a grouped sources line: `Sources: filename.txt [1][3], other.txt [2].`
 
@@ -148,10 +159,25 @@ Full per-source documentation is in `RAG_SOURCES.md`.
 
 ## Run
 
+### Without Docker (recommended on malinka)
+
 ```bash
 cp .env.example .env
 # set keys/models/base URLs as needed
 
+./run.sh start
+# optional: ./run.sh fresh   # wipe chroma and re-index
+# stop:     ./run.sh stop
+```
+
+This starts:
+- FastAPI backend on `http://localhost:8000`
+- Gradio UI on `http://localhost:7860`
+
+### With Docker
+
+```bash
+cp .env.example .env
 docker-compose up --build
 ```
 
@@ -169,7 +195,7 @@ Delete the `chroma/` directory to force a full re-index after corpus or embeddin
 2. Topic: `Rubicon legality`
 3. Click **Start debate**
 4. Verify separate Caesar/Pompey bubbles
-5. Verify turns include inline snippet citations (e.g. `[1]`) and a grouped `Sources:` line
+5. Verify turns include inline document citations (e.g. `[1]`) and a grouped `Sources:` line
 6. Click **Stop debate**
 
 ## API demo
