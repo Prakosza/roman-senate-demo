@@ -196,7 +196,8 @@ class DebateManager:
                 )
                 state.turns.append((name, text))
                 await asyncio.sleep(self.turn_delay)
-        except Exception as exc:  # noqa: BLE001 - any failure should end the debate and reach the UI
+        except Exception as exc:
+            # Any failure ends the debate and is shown in the UI.
             if state.queue:
                 await state.queue.put(f"[ERROR] {exc}")
         finally:

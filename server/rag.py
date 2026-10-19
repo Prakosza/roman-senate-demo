@@ -27,15 +27,10 @@ class _OpenAICompatibleEmbedding(EmbeddingFunction):  # type: ignore[type-arg]
         return cast(Embeddings, [item.embedding for item in resp.data])
 
 
-# The sources are Gutenberg translations (Caesar, Plutarch, Cicero...) with long
-# paragraphs (median ~1200 chars) and lots of abbreviations like "B.C.", "Cn." or "M.".
-#
-# - chunk_size 1500 keeps most paragraphs whole (~270 tokens, fine for any embedding
-#   model). Mid-sentence breaks: 19.4% at 1500 vs 25.8% at 1200 and ~60% when
-#   splitting on a bare ".".
-# - ". " instead of "." so dotted abbreviations like "B.C." aren't cut in the middle.
-#   Sentence-level separators only kick in for paragraphs longer than chunk_size.
-# - 300 chars of overlap because events in narrative text often span paragraphs.
+# The sources are Gutenberg translations hard-wrapped at ~70 characters per line,
+# so chunks end at blank lines or line ends. The sentence separators below are
+# only a fallback. 1500 characters with 300 overlap keeps a few paragraphs of
+# narrative together, since events often span more than one paragraph.
 _splitter = RecursiveCharacterTextSplitter(
     chunk_size=1500,
     chunk_overlap=300,

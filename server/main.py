@@ -28,7 +28,7 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL") or None  # ensure empty string -> None
 
 if not LLM_MODEL:
     raise RuntimeError(
-        "Set LLM_MODEL (e.g. 'gpt-4o-mini' for OpenAI, "
+        "Set LLM_MODEL (e.g. 'gpt-5-mini' for OpenAI, "
         "'meta/llama-3.1-8b-instruct' for NIM, model name served locally, etc.)"
     )
 

@@ -276,7 +276,8 @@ def start(topic: str, history: list[dict], chat_id: str):
 
                 elif delta.startswith("[ERROR]"):
                     debate_complete = True
-                    history.append({"role": "assistant", "content": f"**{delta.strip()}**"})
+                    error = delta.removeprefix("[ERROR]").strip()
+                    history.append({"role": "assistant", "content": f"**Error:** {error}"})
                     yield history, chat_id, gr.update(interactive=True), gr.update(interactive=False)
 
                 elif current_speaker and history:

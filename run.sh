@@ -14,13 +14,13 @@ wait_for() {
   while [ "$elapsed" -lt "$timeout" ]; do
     if curl -s --max-time 2 "$url" >/dev/null 2>&1; then return 0; fi
     sleep 3; elapsed=$((elapsed + 3))
-    printf "  waiting… %ds\n" "$elapsed"
+    printf "  waiting... %ds\n" "$elapsed"
   done
   echo "ERROR: $url not reachable after ${timeout}s" >&2; return 1
 }
 
 stop() {
-  echo "Stopping…"
+  echo "Stopping..."
   kill_port $SERVER_PORT
   kill_port $GRADIO_PORT
   sleep 1
@@ -31,7 +31,7 @@ start() {
   stop
 
   if [ ! -d "$VENV" ]; then
-    echo "Creating venv…"
+    echo "Creating venv..."
     python3 -m venv "$VENV"
     source "$VENV/bin/activate"
     pip install -r requirements.txt
@@ -41,28 +41,28 @@ start() {
 
   local fresh="${1:-}"
   if [ "$fresh" = "--fresh" ]; then
-    echo "Removing Chroma index…"
+    echo "Removing Chroma index..."
     rm -rf ./chroma
   fi
 
-  echo "Starting backend on :$SERVER_PORT …"
+  echo "Starting backend on :$SERVER_PORT ..."
   nohup uvicorn server.main:app --host 0.0.0.0 --port $SERVER_PORT \
     > /tmp/senate-server.log 2>&1 &
-  echo "  PID $! → log: /tmp/senate-server.log"
+  echo "  PID $! log: /tmp/senate-server.log"
 
-  echo "Waiting for backend…"
+  echo "Waiting for backend..."
   wait_for "http://localhost:$SERVER_PORT/health" 120
 
-  echo "Starting Gradio on :$GRADIO_PORT …"
+  echo "Starting Gradio on :$GRADIO_PORT ..."
   DEBATE_API_BASE="http://localhost:$SERVER_PORT/v1/chat/completions" \
     nohup python3 gradio_app.py > /tmp/senate-gradio.log 2>&1 &
-  echo "  PID $! → log: /tmp/senate-gradio.log"
+  echo "  PID $! log: /tmp/senate-gradio.log"
 
   wait_for "http://localhost:$GRADIO_PORT" 30
 
   echo ""
-  echo "✓ Backend:  http://localhost:$SERVER_PORT/health"
-  echo "✓ Gradio:   http://localhost:$GRADIO_PORT"
+  echo "Backend:  http://localhost:$SERVER_PORT/health"
+  echo "Gradio:   http://localhost:$GRADIO_PORT"
   echo ""
   echo "Logs:"
   echo "  tail -f /tmp/senate-server.log"
