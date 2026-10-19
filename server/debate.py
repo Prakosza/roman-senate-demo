@@ -11,7 +11,7 @@ from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageParam
 
 from .prompts import CAESAR_SYSTEM_PROMPT, POMPEY_SYSTEM_PROMPT
-from .rag import RAG
+from .rag import RAG, Snippet
 
 LOG_DIR = Path(os.getenv("DEBATE_LOG_DIR", "./logs"))
 LOG_PATH = LOG_DIR / "debate.log"
@@ -22,14 +22,16 @@ SPEAKERS = [
     ("Pompey", "pompey_collection", POMPEY_SYSTEM_PROMPT),
 ]
 
+# How many past turns are replayed to the model on each turn.
+HISTORY_TURNS = 40
+
 
 def _make_debate_logger(topic: str) -> logging.Logger:
-    """Create (or reset) the debate log file."""
+    """Start a fresh logs/debate.log for this debate."""
     LOG_DIR.mkdir(exist_ok=True)
     logger = logging.getLogger("debate")
     logger.setLevel(logging.DEBUG)
     logger.propagate = False
-    # Remove old handlers, start fresh file
     for h in logger.handlers[:]:
         logger.removeHandler(h)
         h.close()
@@ -38,6 +40,74 @@ def _make_debate_logger(topic: str) -> logging.Logger:
     logger.addHandler(fh)
     logger.info("DEBATE START  topic=%s", topic)
     return logger
+
+
+def build_retrieval_query(topic: str, turns: list[tuple[str, str]]) -> str:
+    """Query for the vector search: the topic plus the start of the opponent's last turn.
+
+    Only the first ~200 chars of the last turn are used. Embedding a whole speech
+    dilutes the query and pulls in less relevant chunks.
+    """
+    if not turns:
+        return f"Topic: {topic}"
+    last = turns[-1][1][:200].rsplit(" ", 1)[0] + "…"
+    return f"Topic: {topic}\nOpponent's last point we need to rebut: {last}"
+
+
+def build_documents_block(snippets: list[Snippet]) -> str:
+    if not snippets:
+        return "<documents>\n  <empty/>\n</documents>"
+    lines = ["<documents>"]
+    for i, s in enumerate(snippets, start=1):
+        lines.append(f'  <document index="{i}">')
+        lines.append(f"    <source>{s['source']}</source>")
+        lines.append(f"    <document_content>{s['text']}</document_content>")
+        lines.append("  </document>")
+    lines.append("</documents>")
+    return "\n".join(lines)
+
+
+def build_messages(
+    speaker: str,
+    system_prompt: str,
+    topic: str,
+    turns: list[tuple[str, str]],
+    snippets: list[Snippet],
+) -> list[ChatCompletionMessageParam]:
+    """Build the chat request for one turn, from the point of view of `speaker`.
+
+    The speaker's own past turns become "assistant" messages and the opponent's
+    become "user" messages, so each agent only ever sees the debate from its own
+    side. Retrieved documents go into the last user message, before the
+    instruction, rather than into the system prompt. That keeps the system prompt
+    identical across turns and puts the sources right next to the question.
+    """
+    messages: list[ChatCompletionMessageParam] = [
+        {"role": "system", "content": f"{system_prompt}\n\n<debate_topic>{topic}</debate_topic>"},
+    ]
+
+    for name, text in turns[-HISTORY_TURNS:]:
+        role = "assistant" if name == speaker else "user"
+        messages.append({"role": role, "content": text})
+
+    if turns:
+        opponent = "Pompey" if speaker == "Caesar" else "Caesar"
+        task = f"Now respond to {opponent}'s latest argument."
+    else:
+        task = f"Open the debate on: {topic}"
+
+    messages.append(
+        {
+            "role": "user",
+            "content": (
+                f"{build_documents_block(snippets)}\n\n"
+                "Above are retrieved historical sources for this turn. "
+                "Cite relevant documents as [1], [2] etc. for concrete factual claims. "
+                f"{task}"
+            ),
+        }
+    )
+    return messages
 
 
 @dataclass
@@ -53,6 +123,12 @@ class DebateState:
 
 
 class DebateManager:
+    """Runs debates in the background and streams tokens through a per-debate queue.
+
+    Besides model tokens the queue carries a few control markers the UI relies on:
+    [START:<speaker>], [END_TURN], [ERROR] <message> and [DEBATE_DONE].
+    """
+
     def __init__(
         self,
         rag: RAG,
@@ -67,9 +143,9 @@ class DebateManager:
         self.max_turns = max_turns
         self.turn_delay = turn_delay
         self.retrieval_k = int(os.getenv("RAG_RETRIEVAL_K", "14"))
-        # Only pass temperature if explicitly set (reasoning models reject it)
-        _t = os.getenv("LLM_TEMPERATURE", "")
-        self._extra_kwargs: dict = {"temperature": float(_t)} if _t else {}
+        # Temperature is only sent when set explicitly, because reasoning models reject it.
+        temperature = os.getenv("LLM_TEMPERATURE", "")
+        self._extra_kwargs: dict = {"temperature": float(temperature)} if temperature else {}
         self.states: dict[str, DebateState] = {}
 
     def is_active(self, cid: str) -> bool:
@@ -86,8 +162,10 @@ class DebateManager:
             await asyncio.sleep(0.1)
 
         state = DebateState(
-            topic=topic, started_at=time.time(),
-            log=_make_debate_logger(topic), queue=asyncio.Queue(),
+            topic=topic,
+            started_at=time.time(),
+            log=_make_debate_logger(topic),
+            queue=asyncio.Queue(),
         )
         self.states[cid] = state
         state.worker = asyncio.create_task(self._run_debate(state))
@@ -100,8 +178,6 @@ class DebateManager:
         s.stop_requested = True
         return True
 
-    # ── debate loop ──────────────────────────────────────────────
-
     async def _run_debate(self, state: DebateState) -> None:
         loop = asyncio.get_running_loop()
         try:
@@ -109,12 +185,19 @@ class DebateManager:
                 if state.stop_requested:
                     break
                 name, collection, system = SPEAKERS[i % 2]
+                # The OpenAI client is synchronous, so each turn runs in a worker thread.
                 text = await asyncio.to_thread(
-                    self._generate_turn, state, name, collection, system, loop,
+                    self._generate_turn,
+                    state,
+                    name,
+                    collection,
+                    system,
+                    loop,
                 )
                 state.turns.append((name, text))
                 await asyncio.sleep(self.turn_delay)
         except Exception as exc:
+            # Any failure ends the debate and is shown in the UI.
             if state.queue:
                 await state.queue.put(f"[ERROR] {exc}")
         finally:
@@ -122,8 +205,6 @@ class DebateManager:
             state.log.info("DEBATE END  turns=%d  elapsed=%.1fs", len(state.turns), time.time() - state.started_at)
             if state.queue:
                 await state.queue.put("[DEBATE_DONE]")
-
-    # ── single turn generation ───────────────────────────────────
 
     def _generate_turn(
         self,
@@ -133,81 +214,27 @@ class DebateManager:
         system_prompt: str,
         loop: asyncio.AbstractEventLoop,
     ) -> str:
-        # Retrieve relevant documents — structured query, truncated for embedding quality
-        if state.turns:
-            last = state.turns[-1][1][:200].rsplit(" ", 1)[0] + "…"
-            query = f"Topic: {state.topic}\nOpponent's last point we need to rebuttal: {last}"
-        else:
-            query = f"Topic: {state.topic}"
+        query = build_retrieval_query(state.topic, state.turns)
         snippets = self.rag.retrieve(collection, query, k=self.retrieval_k)
+        messages = build_messages(speaker, system_prompt, state.topic, state.turns, snippets)
 
-        # Build document block (Anthropic RAG pattern: documents in user turn)
-        if snippets:
-            doc_lines = ["<documents>"]
-            for i, s in enumerate(snippets):
-                doc_lines.append(f'  <document index="{i+1}">')
-                doc_lines.append(f"    <source>{s['source']}</source>")
-                doc_lines.append(f"    <document_content>{s['text']}</document_content>")
-                doc_lines.append("  </document>")
-            doc_lines.append("</documents>")
-            doc_block = "\n".join(doc_lines)
-        else:
-            doc_block = "<documents>\n  <empty/>\n</documents>"
-
-        # Build messages: single system prompt → conversation history → user
-        # turn with RAG context (following Anthropic's recommended placement).
-        # All debate rules live in prompts.py (no duplication here).
-        messages: list[ChatCompletionMessageParam] = [
-            {
-                "role": "system",
-                "content": (
-                    f"{system_prompt}\n\n"
-                    f"<debate_topic>{state.topic}</debate_topic>"
-                ),
-            },
-        ]
-
-        # Replay past turns as alternating user/assistant messages.
-        # Own turns → assistant, opponent turns → user.
-        # Keep only last 40 turns to limit context length.
-        recent_turns = state.turns[-40:] if len(state.turns) > 40 else state.turns
-        for name, text in recent_turns:
-            if name == speaker:
-                messages.append({"role": "assistant", "content": text})
-            else:
-                messages.append({"role": "user", "content": text})
-
-        # Final user message: RAG context + turn instruction (Anthropic pattern:
-        # documents at top, query/instruction at bottom).
-        if state.turns:
-            opponent = "Pompey" if speaker == "Caesar" else "Caesar"
-            context_instruction = (
-                f"{doc_block}\n\n"
-                "Above are retrieved historical sources for this turn. "
-                "Cite relevant documents as [1], [2] etc. for concrete factual claims. "
-                f"Now respond to {opponent}'s latest argument."
-            )
-        else:
-            context_instruction = (
-                f"{doc_block}\n\n"
-                "Above are retrieved historical sources for this turn. "
-                "Cite relevant documents as [1], [2] etc. for concrete factual claims. "
-                f"Open the debate on: {state.topic}"
-            )
-        messages.append({"role": "user", "content": context_instruction})
-
-        # Signal turn start
         if state.queue:
             loop.call_soon_threadsafe(state.queue.put_nowait, f"[START:{speaker}]")
 
         stream = self.client.chat.completions.create(
-            model=self.model, messages=messages, stream=True, **self._extra_kwargs,
+            model=self.model,
+            messages=messages,
+            stream=True,
+            **self._extra_kwargs,
         )
         parts: list[str] = []
         try:
             for chunk in stream:
                 if state.stop_requested:
                     break
+                # Some OpenAI-compatible servers send chunks with no choices (e.g. usage stats).
+                if not chunk.choices:
+                    continue
                 token = chunk.choices[0].delta.content or ""
                 if token:
                     parts.append(token)
@@ -218,11 +245,12 @@ class DebateManager:
 
         response = "".join(parts) or "Not supported by sources."
 
-        # Log this turn: retrieved chunks + generated response
+        # The log keeps the retrieved chunks next to each answer, which makes it
+        # easy to check whether a citation actually matches its source.
         turn_num = len(state.turns) + 1
-        state.log.info("── TURN %d: %s ──", turn_num, speaker)
-        for i, s in enumerate(snippets):
-            state.log.info("  chunk[%d] (%s):\n%s", i + 1, s["source"], s["text"])
+        state.log.info("-- TURN %d: %s --", turn_num, speaker)
+        for i, s in enumerate(snippets, start=1):
+            state.log.info("  chunk[%d] (%s):\n%s", i, s["source"], s["text"])
         state.log.info("  RESPONSE: %s", response)
 
         if state.queue:

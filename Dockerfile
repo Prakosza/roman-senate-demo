@@ -7,7 +7,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY server ./server
 COPY data ./data
-COPY assets ./assets
 COPY gradio_app.py ./gradio_app.py
 
 ENV PYTHONUNBUFFERED=1

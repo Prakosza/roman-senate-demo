@@ -8,30 +8,31 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Header
-from fastapi.responses import JSONResponse, StreamingResponse
-from openai import OpenAI
-from pydantic import BaseModel, Field
 
-from .debate import DebateManager
-from .rag import RAG
-
+# Load .env before importing our modules, some of them read settings at import time.
 load_dotenv()
 
-# LLM provider (OpenAI-compatible: OpenAI, vLLM, Ollama, NIM, etc.)
-# For local models a key is not required — "not-needed" is used as a
-# placeholder so the openai SDK doesn’t complain.
+from fastapi import FastAPI, Header  # noqa: E402
+from fastapi.responses import JSONResponse, StreamingResponse  # noqa: E402
+from openai import OpenAI  # noqa: E402
+from pydantic import BaseModel, Field  # noqa: E402
+
+from .debate import DebateManager  # noqa: E402
+from .rag import RAG  # noqa: E402
+
+# Any OpenAI-compatible server works (OpenAI, vLLM, Ollama, NIM, llama.cpp...).
+# Local servers don't need a key, but the openai SDK insists on one, hence "not-needed".
 LLM_API_KEY = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY", "not-needed")
 LLM_MODEL = os.getenv("LLM_MODEL") or os.getenv("OPENAI_MODEL", "")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL") or None  # ensure empty string -> None
 
 if not LLM_MODEL:
     raise RuntimeError(
-        "Set LLM_MODEL (e.g. 'gpt-4o-mini' for OpenAI, "
+        "Set LLM_MODEL (e.g. 'gpt-5-mini' for OpenAI, "
         "'meta/llama-3.1-8b-instruct' for NIM, model name served locally, etc.)"
     )
 
-# Embedding provider (also OpenAI-compatible)
+# Embeddings can come from a different server than the chat model.
 EMBEDDING_API_KEY = os.getenv("EMBEDDING_API_KEY") or LLM_API_KEY
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL") or os.getenv("OPENAI_EMBEDDING_MODEL", "")
 EMBEDDING_BASE_URL = os.getenv("EMBEDDING_BASE_URL") or LLM_BASE_URL
@@ -59,13 +60,11 @@ rag = RAG(
     embedding_api_key=EMBEDDING_API_KEY,
     embedding_base_url=EMBEDDING_BASE_URL,
 )
+# Each senator retrieves only from his own collection. A file with the same name
+# in both folders is skipped in both.
 caesar_docs_dir = Path("./data/caesar_docs")
 pompey_docs_dir = Path("./data/pompey_docs")
-shared_filenames = {
-    p.name for p in caesar_docs_dir.glob("*.txt")
-} & {
-    p.name for p in pompey_docs_dir.glob("*.txt")
-}
+shared_filenames = {p.name for p in caesar_docs_dir.glob("*.txt")} & {p.name for p in pompey_docs_dir.glob("*.txt")}
 
 rag.build_or_load_index("caesar_collection", str(caesar_docs_dir), exclude_filenames=shared_filenames)
 rag.build_or_load_index("pompey_collection", str(pompey_docs_dir), exclude_filenames=shared_filenames)
@@ -159,7 +158,7 @@ async def chat_completions(
     authorization: Annotated[str | None, Header()] = None,
     x_chat_id: Annotated[str | None, Header(alias="X-Chat-Id")] = None,
 ):
-    _ = authorization  # accept any non-empty key
+    _ = authorization  # accepted for client compatibility, not checked
 
     convo_id = _conversation_id(req, x_chat_id)
     latest = _latest_user_message(req.messages)

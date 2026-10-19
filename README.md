@@ -1,229 +1,139 @@
-# roman-senate-demo
+# Roman Senate
 
-Minimal demo: two independent agents (**Caesar** and **Pompey**) debate turn-by-turn with separate RAG sources and separate agent memory.
-RAG is used for grounding factual claims, while tone and argument style stay in-character (Roman statesmen, not modern historians).
+Two LLM agents, Caesar and Pompey, debate a topic you give them. Each one retrieves only from his own set of ancient sources and backs factual claims with numbered citations to them.
 
-## Design choices
+Pick a topic like "Rubicon legality" or "Should Rome build more aqueducts?" and they argue it turn by turn in the browser.
 
-- **No custom frontend code** for production path.
-- **UI:** Gradio (ready-made, stable) for one-turn-per-bubble behavior.
-- **Backend:** small FastAPI OpenAI-compatible endpoint.
+## How it works
 
-## What it supports
-
-- `/debate start <topic>`
-- `/debate stop`
-- auto-stop by `MAX_TURNS` (default 30)
-- strict agent isolation:
-  - Caesar history separate from Pompey history
-  - Caesar retrieves only from `caesar_collection`
-  - Pompey retrieves only from `pompey_collection`
-  - duplicate filenames across corpora are excluded to keep sources perspective-specific
-- distinct in-character rhetoric:
-  - Caesar: first-person defensive command voice, aggressive rebuttal
-  - Pompey: first-person legal prosecution voice, aggressive attack
-- role-driven debate behavior:
-  - opening sentence must rebut the opponent's latest claim
-  - agents address each other directly as political rivals
-  - neutral academic phrasing is discouraged
-- structured retrieval queries (topic + opponent's last point for rebuttal context)
-- retrieval diversity guardrails:
-  - over-fetch k×2 candidates + deduplicate before final selection
-  - distance-based filtering (`RAG_MAX_DISTANCE`, default 1.45) to drop low-relevance chunks
-  - cap repeated documents from one source per turn (`RAG_MAX_SNIPPETS_PER_SOURCE`)
-- RAG context placement follows [Anthropic's recommended pattern](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices#long-context-prompting):
-  - retrieved documents are injected in the **user turn** (not system), using structured XML (`<documents>` → `<document index="N">` → `<source>` + `<document_content>`)
-  - documents appear at the top of the user message, with the query/instruction below — matching the "longform data first, query last" guideline
-  - single merged system prompt (character + topic + instructions) stays stable across turns
-- conversation history capped to last 40 turns to limit context length
-- response grounding:
-  - citations use document indices inline (e.g. `[1]`, `[2][5]`)
-  - Sources line groups cited indices by file: `Sources: filename.txt [1][3], other.txt [2].`
-  - rhetorical/strategic statements can be uncited
-  - unsupported concrete claims should be stated as `Not supported by sources.`
-
-## Model provider flexibility (external + local)
-
-Both chat and embeddings use the **OpenAI-compatible** API format, so any
-server that exposes `/v1/chat/completions` and `/v1/embeddings` works — no
-code changes needed.
-
-| Variable | Purpose | Example (OpenAI) | Example (local NIM) |
-|---|---|---|---|
-| `LLM_API_KEY` | Chat API key (optional for local) | `sk-…` | *(leave empty)* |
-| `LLM_BASE_URL` | Chat endpoint | *(omit = openai.com)* | `http://localhost:8000/v1` |
-| `LLM_MODEL` | **Required** — model name | `gpt-5-mini` | `meta/llama-3.1-8b-instruct` |
-| `EMBEDDING_API_KEY` | Embed API key (falls back to `LLM_API_KEY`) | `sk-…` | *(leave empty)* |
-| `EMBEDDING_BASE_URL` | Embed endpoint (falls back to `LLM_BASE_URL`) | *(omit)* | `http://localhost:9000/v1` |
-| `EMBEDDING_MODEL` | **Required** — embedding model name | `text-embedding-3-large` | `nvidia/nv-embedqa-e5-v5` |
-
-**No API key is required for local models** — the placeholder `"not-needed"` is
-used automatically when the key is empty or unset.
-
-### Quick-start: NVIDIA DGX / local models
-
-```bash
-# 1. Serve models (example: NIM containers on DGX Spark)
-#    Chat:      localhost:8000
-#    Embeddings: localhost:9000
-
-# 2. Configure .env
-LLM_BASE_URL=http://localhost:8000/v1
-LLM_MODEL=meta/llama-3.1-8b-instruct
-EMBEDDING_BASE_URL=http://localhost:9000/v1
-EMBEDDING_MODEL=nvidia/nv-embedqa-e5-v5
-
-# 3. Run
-docker-compose up --build   # or: ./run.sh
+```mermaid
+flowchart LR
+    UI["Gradio UI"] -- "/debate start topic" --> API["FastAPI<br/>/v1/chat/completions"]
+    API -- "SSE token stream" --> UI
+    API --> DM["DebateManager"]
+    DM -- "Caesar's turns" --> RC[("caesar_collection<br/>Chroma")]
+    DM -- "Pompey's turns" --> RP[("pompey_collection<br/>Chroma")]
+    DM --> LLM["Any OpenAI-compatible LLM"]
 ```
 
-Also works with **vLLM**, **Ollama** (`http://localhost:11434/v1`), **LM Studio**, **text-embeddings-inference**, etc.
+Each turn goes like this:
 
-Optional RAG tuning env vars:
-- `RAG_RETRIEVAL_K` (documents per turn, default `14`)
-- `RAG_MAX_SNIPPETS_PER_SOURCE` (cap per source in one turn, default `4`)
-- `RAG_MIN_CHUNK_CHARS` (skip tiny chunks, default `120`)
-- `RAG_MAX_DISTANCE` (L² distance cutoff for relevance filtering, default `1.45`)
-- `RAG_EMBED_BATCH_SIZE` (chunks per embedding API call during indexing, default `100`)
+1. The search query is the topic plus the first ~200 characters of the opponent's last turn. Embedding a whole speech dilutes the query.
+2. Retrieval runs on the speaker's own collection only. It fetches 2×k candidates, drops chunks past a distance cutoff, drops duplicates and caps how many chunks can come from one file, so a single long book can't fill the whole context.
+3. The request is built from the speaker's point of view: his own past turns are `assistant` messages, the opponent's are `user` messages. Retrieved chunks go into the last user message as numbered `<document>` blocks, so the system prompt (character and debate rules) stays the same on every turn.
+4. Tokens are streamed back over SSE. The backend mixes in a few control markers (`[START:Caesar]`, `[END_TURN]`, `[DEBATE_DONE]`) so the UI knows where one speech ends and the next begins.
 
-## Prompt architecture
+The prompts ask for `[n]` citations on concrete factual claims and for "Not supported by sources." when nothing backs a claim. Each turn is written to `logs/debate.log` together with the chunks the model was given, which makes it easy to check whether a citation matches its source.
 
-System prompt is structured with XML tags following
-[Anthropic's prompting best practices](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices):
+The backend uses the OpenAI chat completions format, so a debate can also be started and streamed with curl or any OpenAI client. Speaker changes then show up as the plain-text markers above. The model provider is just configuration: chat and embeddings can come from OpenAI, vLLM, Ollama, LM Studio, NVIDIA NIM or llama.cpp, and from two different servers if needed.
 
-```xml
-<role>        Character identity and historical background      </role>
-<character>   How this senator thinks, argues, and speaks        </character>
-<topic_handling>  When to use biography vs. engage the topic     </topic_handling>
-<debate_rules>    Numbered rules: voice, structure, citations    </debate_rules>
+Footnote and page markers like `[56]` or `[p. 12]` are stripped from the source texts before indexing, because the model would otherwise read them as citations.
 
-<debate_topic>  Injected per-debate (the only variable part)     </debate_topic>
-```
+## Running it
 
-All debate rules live in `prompts.py` — no duplication in `debate.py`.
-
-### Prompt contract (short)
-
-- Speak in first person as Caesar/Pompey.
-- First sentence: direct rebuttal to the previous turn, then 3-7 sentences advancing own argument.
-- Retrieved documents are injected in the **user turn** as structured XML:
-  ```xml
-  <documents>
-    <document index="1">
-      <source>filename.txt</source>
-      <document_content>text</document_content>
-    </document>
-  </documents>
-  ```
-- Cite document indices inline for concrete factual/legal claims (e.g. `[1]`, `[2][5]`).
-- If a concrete claim lacks support: `Not supported by sources.`
-- End with a grouped sources line: `Sources: filename.txt [1][3], other.txt [2].`
-
-## Repo layout
-
-```text
-roman-senate-demo/
-  server/
-    main.py
-    debate.py
-    rag.py
-    prompts.py
-  data/
-    caesar_docs/
-    pompey_docs/
-  scripts/
-    fetch_public_domain_sources.py
-  gradio_app.py
-  Dockerfile
-  docker-compose.yml
-  requirements.txt
-```
-
-## Legal sources policy
-
-No copyrighted books are committed.
-
-Included:
-- authored placeholders (`sample_*.txt`)
-- public-domain English texts:
-  - Caesar corpus:
-    - `data/caesar_docs/caesar_commentaries_pg10657_full.txt`
-    - `data/caesar_docs/suetonius_twelve_caesars_pg6400.txt`
-    - `data/caesar_docs/lucan_pharsalia_pg602_caesar_context.txt`
-    - `data/caesar_docs/plutarch_lives_pg674_caesar_context.txt`
-  - Pompey corpus:
-    - `data/pompey_docs/plutarch_lives_vol3_pg14140_full.txt`
-    - `data/pompey_docs/plutarch_lives_vol2_pg14114_pompey_context.txt`
-    - `data/pompey_docs/lucan_pharsalia_pg602_pompey_context.txt`
-    - `data/pompey_docs/plutarch_lives_pg674_pompey_context.txt`
-    - `data/pompey_docs/caesar_commentaries_pg10657_civil_war_context.txt`
-    - `data/pompey_docs/cicero_letters_to_atticus_vol1_pg58418.txt`
-    - `data/pompey_docs/cicero_letters_to_atticus_vol2_pg50692.txt`
-    - `data/pompey_docs/cicero_letters_to_atticus_vol3_pg51403.txt`
-
-Optional fetch script:
-
-```bash
-python3 scripts/fetch_public_domain_sources.py
-```
-
-The fetch script removes legacy noisy/duplicate files (`appian_civil_wars_pg28334_selected.txt`,
-`caesar_commentaries_pg10657_selected.txt`, `plutarch_lives_vol3_pg14140_selected.txt`) and performs
-basic deduplication in each corpus to reduce repeated material.
-
-Full per-source documentation is in `RAG_SOURCES.md`.
-
-## Run
-
-### Without Docker (recommended on malinka)
+You need an OpenAI API key, or any OpenAI-compatible server for chat and embeddings.
 
 ```bash
 cp .env.example .env
-# set keys/models/base URLs as needed
-
-./run.sh start
-# optional: ./run.sh fresh   # wipe chroma and re-index
-# stop:     ./run.sh stop
+# set LLM_API_KEY, LLM_MODEL (e.g. gpt-5-mini) and EMBEDDING_MODEL (e.g. text-embedding-3-large)
+docker compose up --build
 ```
 
-This starts:
-- FastAPI backend on `http://localhost:8000`
-- Gradio UI on `http://localhost:7860`
+Then open http://localhost:7860.
 
-### With Docker
+On the first start the backend splits and embeds everything in `data/` into `chroma/`. That takes a few minutes and uses the embedding API. Later starts reuse the index; delete `chroma/` to rebuild it.
+
+Without Docker:
 
 ```bash
-cp .env.example .env
-docker-compose up --build
+./run.sh start    # creates .venv on first run, starts backend :8000 and UI :7860
+./run.sh fresh    # same, but rebuilds the Chroma index
+./run.sh logs
+./run.sh stop     # kills whatever listens on 8000 and 7860
 ```
 
-Note: on first startup Chroma collections are built from the text files in `data/`.
-Delete the `chroma/` directory to force a full re-index after corpus or embedding model changes.
+Keep a local model server off port 8000: the backend uses it, and `run.sh stop` kills whatever listens there.
 
-### UIs
+### Local models
 
-- **Gradio:** `http://localhost:7860`
-- **Backend API:** `http://localhost:8000/v1/chat/completions`
+With `run.sh`, point the base URLs at your server and leave the keys empty:
 
-## Quick demo
+```bash
+LLM_BASE_URL=http://localhost:11434/v1          # Ollama, vLLM, LM Studio, NIM...
+LLM_MODEL=llama3.1:8b
+EMBEDDING_BASE_URL=http://localhost:11434/v1
+EMBEDDING_MODEL=nomic-embed-text
+```
 
-1. Open Gradio (`:7860`)
-2. Topic: `Rubicon legality`
-3. Click **Start debate**
-4. Verify separate Caesar/Pompey bubbles
-5. Verify turns include inline document citations (e.g. `[1]`) and a grouped `Sources:` line
-6. Click **Stop debate**
+Inside Docker `localhost` is the container itself, so use `http://host.docker.internal:11434/v1` instead (on Linux this also needs `extra_hosts: ["host.docker.internal:host-gateway"]` on the `senate-server` service).
 
-## API demo
+For an NVIDIA DGX Spark there is a compose overlay that serves gpt-oss-120b and Qwen3-Embedding-4B through llama.cpp. Download the model files as described at the top of `docker-compose-spark.yml`, set `LLM_MODEL=gpt-oss-120b` and `EMBEDDING_MODEL=Qwen3-Embedding-4B` in `.env`, then:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose-spark.yml up -d --build
+```
+
+## Configuration
+
+| Variable | Default | Notes |
+|---|---|---|
+| `LLM_MODEL` | (required) | Chat model name |
+| `LLM_API_KEY` | | Empty is fine for local servers |
+| `LLM_BASE_URL` | OpenAI | Any OpenAI-compatible `/v1` endpoint |
+| `LLM_TEMPERATURE` | not sent | Reasoning models reject a temperature |
+| `EMBEDDING_MODEL` | (required) | Embedding model name |
+| `EMBEDDING_API_KEY` / `EMBEDDING_BASE_URL` | same as LLM | Embeddings can come from a different server |
+| `MAX_TURNS` | 30 | Speeches per debate. `.env.example` sets 12 |
+| `RAG_RETRIEVAL_K` | 14 | Chunks per turn |
+| `RAG_MAX_SNIPPETS_PER_SOURCE` | 4 | Cap per source file per turn |
+| `RAG_MAX_DISTANCE` | 1.45 | Chunks further than this are dropped |
+| `RAG_MIN_CHUNK_CHARS` | 120 | Shorter chunks aren't indexed |
+| `RAG_EMBED_BATCH_SIZE` | 100 | Chunks per embedding request while indexing |
+| `CHROMA_DIR` / `DEBATE_LOG_DIR` | `./chroma` / `./logs` | |
+
+## API
 
 ```bash
 curl -N http://localhost:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer dummy' \
-  -H 'X-Chat-Id: test-1' \
-  -d '{"model":"roman-senate","stream":true,"messages":[{"role":"user","content":"/debate start Rubicon legality"}]}'
+  -H 'X-Chat-Id: demo-1' \
+  -d '{"model": "roman-senate", "stream": true,
+       "messages": [{"role": "user", "content": "/debate start Rubicon legality"}]}'
 ```
 
-## Notes
+`X-Chat-Id` identifies the debate. Send `/debate stop` with the same id to end it early. `GET /health` returns the configured models.
 
-- RAG is intentionally simple (text files + recursive text splitting + Chroma).
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+The tests cover retrieval filtering, how each turn's messages are built and the stream of tokens and control markers the UI relies on. The LLM and the vector store are replaced with fakes, so no API key is needed. GitHub Actions runs them, plus ruff, on every pull request and push to master.
+
+## Project layout
+
+```text
+server/
+  main.py       FastAPI app, config, startup indexing
+  debate.py     debate loop, prompt assembly, streaming
+  rag.py        chunking, indexing and filtered retrieval (Chroma)
+  prompts.py    Caesar and Pompey system prompts
+gradio_app.py   web UI
+data/           source texts, one folder per senator
+scripts/        downloads and cleans the source texts
+tests/
+```
+
+## Sources
+
+The books are public domain English translations from Project Gutenberg: Caesar's *Commentaries*, Suetonius, Plutarch, Lucan's *Pharsalia* and Cicero's letters to Atticus. Each senator also has a few short hand-written notes (`sample_*.txt`), which are indexed and can be cited like the books. [RAG_SOURCES.md](RAG_SOURCES.md) lists every file, and `scripts/fetch_public_domain_sources.py` downloads and cleans the books again.
+
+## Limitations
+
+- Citation accuracy isn't measured automatically yet. Checking it means reading `logs/debate.log`, which only holds the most recent debate.
+- The two corpora overlap. Lucan's *Pharsalia* is in both, and the Civil War part of Caesar's *Commentaries* given to Pompey is also inside Caesar's copy, so on those texts both senators retrieve the same passages.
+- The Gutenberg texts are hard-wrapped at ~70 characters, so chunks end at line breaks rather than at sentence ends. Joining the wrapped lines back into paragraphs before splitting would give cleaner chunks.
+- Strict chat templates may reject the message order. A turn can start with an `assistant` message right after the system prompt, and the opponent's last speech and the retrieved sources arrive as two `user` messages in a row. OpenAI-style APIs accept both.
+- Debates live in memory, so restarting the backend ends them.

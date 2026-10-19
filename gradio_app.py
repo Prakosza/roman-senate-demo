@@ -14,17 +14,14 @@ from gradio.themes import GoogleFont
 API_BASE = os.getenv("DEBATE_API_BASE", "http://senate-server:8000/v1/chat/completions")
 API_KEY = os.getenv("DEBATE_API_KEY", "dummy")
 
-# ── Custom CSS ──────────────────────────────────────────────────────────────
 CUSTOM_CSS = """
-/* Import a serif font for the Roman feel */
 @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Spectral:ital,wght@0,400;0,600;1,400&display=swap');
 
-/* ── Force dark regardless of OS light-mode preference ── */
+/* Always dark, whatever the OS setting */
 :root, :root * {
     color-scheme: dark !important;
 }
 
-/* Global overrides */
 .gradio-container {
     font-family: 'Spectral', Georgia, serif !important;
     background: linear-gradient(170deg, #1a1410 0%, #2a2018 40%, #1a1410 100%) !important;
@@ -61,7 +58,7 @@ CUSTOM_CSS = """
     border-radius: 8px !important;
 }
 
-/* Message bubbles — Gradio 6 selectors */
+/* Message bubbles (Gradio 6 selectors) */
 #chatbot .message-wrap .message,
 #chatbot .message {
     border-radius: 8px !important;
@@ -139,7 +136,7 @@ CUSTOM_CSS = """
     background: #4d4435 !important;
 }
 
-/* Textboxes — also cover Gradio 6 wrapper/container */
+/* Textboxes, including the Gradio 6 wrappers */
 textarea, input[type="text"],
 .gradio-container textarea,
 .gradio-container input[type="text"] {
@@ -162,7 +159,7 @@ label, .label-text, .gradio-container label span {
     letter-spacing: 0.5px;
 }
 
-/* Block/panel backgrounds — catch any remaining white panels */
+/* Remaining white panels */
 .gradio-container .block,
 .gradio-container .panel,
 .gradio-container .form {
@@ -197,7 +194,6 @@ label, .label-text, .gradio-container label span {
 """
 
 
-# ── API helpers ─────────────────────────────────────────────────────────────
 def _call(payload: dict, chat_id: str, stream: bool = False):
     headers = {
         "Content-Type": "application/json",
@@ -215,16 +211,15 @@ def _extract_response_text(payload: dict) -> str:
     return content if isinstance(content, str) else str(content)
 
 
-# ── Debate callbacks ───────────────────────────────────────────────────────
-# Minimum interval between Gradio yields (seconds) — keeps UI smooth
-_YIELD_INTERVAL = 0.04  # ~25 fps
+# Re-render the chat at most ~25 times per second while tokens stream in.
+_YIELD_INTERVAL = 0.04
 
 
 def start(topic: str, history: list[dict], chat_id: str):
     if not topic.strip():
         topic = "Was Caesar justified?"
 
-    # Generate a unique chat ID per session
+    # One backend conversation per browser session
     if chat_id == "gradio-default":
         chat_id = f"gradio-{uuid.uuid4().hex[:8]}"
 
@@ -256,37 +251,35 @@ def start(topic: str, history: list[dict], chat_id: str):
                 if not isinstance(delta, str) or not delta:
                     continue
 
-                # ── New turn starts ──────────────────────────────────
+                # The backend mixes control markers into the token stream, see server/debate.py
                 if delta.startswith("[START:"):
                     speaker = delta[7:-1]
                     current_speaker = speaker
                     if speaker == "Caesar":
-                        history.append({"role": "assistant", "content": "### ⚔️ Caesar\n\n"})
+                        history.append({"role": "assistant", "content": "### Caesar\n\n"})
                     else:
-                        history.append({"role": "user", "content": "### 🏛️ Pompey\n\n"})
+                        history.append({"role": "user", "content": "### Pompey\n\n"})
                     yield history, chat_id, gr.update(interactive=False), gr.update(interactive=True)
                     last_yield = time.monotonic()
 
-                # ── Turn finished ────────────────────────────────────
                 elif delta == "[END_TURN]":
                     current_speaker = None
-                    # Always flush the final state of the bubble
                     yield history, chat_id, gr.update(interactive=False), gr.update(interactive=True)
                     last_yield = time.monotonic()
 
-                # ── Debate over ──────────────────────────────────────
                 elif delta == "[DEBATE_DONE]":
                     debate_complete = True
-                    history.append({"role": "assistant", "content": "---\n\n✅ **Debate concluded.** The Senate may deliberate."})
+                    history.append(
+                        {"role": "assistant", "content": "---\n\n**Debate concluded.** The Senate may deliberate."}
+                    )
                     yield history, chat_id, gr.update(interactive=True), gr.update(interactive=False)
 
-                # ── Error ────────────────────────────────────────────
                 elif delta.startswith("[ERROR]"):
                     debate_complete = True
-                    history.append({"role": "assistant", "content": f"⚠️ {delta.strip()}"})
+                    error = delta.removeprefix("[ERROR]").strip()
+                    history.append({"role": "assistant", "content": f"**Error:** {error}"})
                     yield history, chat_id, gr.update(interactive=True), gr.update(interactive=False)
 
-                # ── Token during a turn — append to current bubble ──
                 elif current_speaker and history:
                     history[-1]["content"] += delta
                     now = time.monotonic()
@@ -296,12 +289,12 @@ def start(topic: str, history: list[dict], chat_id: str):
 
     except requests.RequestException as exc:
         debate_complete = True
-        history.append({"role": "assistant", "content": f"⚠️ Backend request failed: {exc}"})
+        history.append({"role": "assistant", "content": f"**Backend request failed:** {exc}"})
         yield history, chat_id, gr.update(interactive=True), gr.update(interactive=False)
 
-    # Safety net: re-enable start button if stream ended without DEBATE_DONE
+    # Stream ended without [DEBATE_DONE] (e.g. backend restarted): unlock the UI anyway
     if not debate_complete:
-        history.append({"role": "assistant", "content": "---\n\n⚠️ **Debate stream ended unexpectedly.**"})
+        history.append({"role": "assistant", "content": "---\n\n**Debate stream ended unexpectedly.**"})
         yield history, chat_id, gr.update(interactive=True), gr.update(interactive=False)
 
 
@@ -313,7 +306,7 @@ def stop(history: list[dict], chat_id: str):
         msg = _extract_response_text(resp.json())
     except requests.RequestException as exc:
         msg = f"Backend request failed: {exc}"
-    history.append({"role": "assistant", "content": f"⏹️ **{msg}**"})
+    history.append({"role": "assistant", "content": f"**{msg}**"})
     return history, chat_id, gr.update(interactive=True), gr.update(interactive=False)
 
 
@@ -321,8 +314,8 @@ def clear_history():
     return [], "gradio-default", gr.update(interactive=True), gr.update(interactive=False)
 
 
-# ── Build theme (always dark, regardless of system preference) ──────────────
 def _build_theme() -> BaseTheme:
+    # fmt: off
     theme = BaseTheme(
         primary_hue=ThemeColor(
             c50="#fdf8f0", c100="#f5e6cc", c200="#e6cc99",
@@ -345,8 +338,8 @@ def _build_theme() -> BaseTheme:
         font=GoogleFont("Spectral"),
         font_mono=GoogleFont("JetBrains Mono"),
     )
-    # Override LIGHT-mode theme vars so the app is always dark,
-    # even when the OS / browser is in light mode.
+    # fmt: on
+    # Light-mode variables are overridden too, so the app stays dark in a light-mode browser.
     theme.set(
         background_fill_primary="#1e1a14",
         background_fill_secondary="#2a2418",
@@ -374,24 +367,20 @@ def _build_theme() -> BaseTheme:
     return theme
 
 
-# ── Build UI ────────────────────────────────────────────────────────────────
 with gr.Blocks(
     title="Roman Senate Debate",
 ) as demo:
-
-    # Header
     gr.HTML(
         """
         <div id="senate-header">
-            <h1>🏛 SENATVS POPVLVSQVE ROMANVS</h1>
-            <p>A deliberation between Caesar and Pompey — each with independent counsel and sources</p>
+            <h1>SENATVS POPVLVSQVE ROMANVS</h1>
+            <p>Caesar and Pompey debate. Each argues from his own sources.</p>
         </div>
         """,
     )
 
     chat_id = gr.State("gradio-default")
 
-    # Controls row
     with gr.Row(equal_height=True):
         with gr.Column(scale=3):
             topic = gr.Textbox(
@@ -401,11 +390,10 @@ with gr.Blocks(
                 max_lines=1,
             )
         with gr.Column(scale=1, min_width=120):
-            start_btn = gr.Button("⚔️  Begin Debate", variant="primary", elem_id="start-btn", size="lg")
+            start_btn = gr.Button("Begin Debate", variant="primary", elem_id="start-btn", size="lg")
         with gr.Column(scale=1, min_width=120):
-            stop_btn = gr.Button("🛑  End Debate", variant="secondary", elem_id="stop-btn", size="lg", interactive=False)
+            stop_btn = gr.Button("End Debate", variant="secondary", elem_id="stop-btn", size="lg", interactive=False)
 
-    # Chatbot
     chatbot = gr.Chatbot(
         height=520,
         elem_id="chatbot",
@@ -415,11 +403,10 @@ with gr.Blocks(
     )
 
     with gr.Row():
-        clear_btn = gr.Button("🗑️ Clear History", size="sm", scale=0)
+        clear_btn = gr.Button("Clear History", size="sm", scale=0)
 
-    gr.HTML('<div id="senate-footer">Powered by RAG-augmented agents · Each senator retrieves only from their own historical sources</div>')
+    gr.HTML('<div id="senate-footer">Each senator retrieves only from his own historical sources</div>')
 
-    # Wire events
     start_event = start_btn.click(
         start,
         inputs=[topic, chatbot, chat_id],
