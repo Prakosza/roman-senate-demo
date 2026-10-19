@@ -34,7 +34,7 @@ These are short local fallback notes, used when external sources are unavailable
 |---|---|
 | `data/caesar_docs/sample_caesar_notes.txt` | Compact strategic framing for Caesar-side argument style. |
 | `data/pompey_docs/sample_pompey_notes.txt` | Compact strategic framing for Pompey-side argument style. |
-| `data/pompey_docs/sample_senate_law_notes.txt` | Compact constitutional/legal context for moderator and Pompey-side legal arguments. |
+| `data/pompey_docs/sample_senate_law_notes.txt` | Compact constitutional/legal context for Pompey-side legal arguments. |
 
 ## Removed Legacy Files
 

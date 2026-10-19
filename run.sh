@@ -2,12 +2,11 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# ── Config ──────────────────────────────────────────────────────────────────
+# Config
 SERVER_PORT=8000
 GRADIO_PORT=7860
 VENV=".venv"
 
-# ── Helpers ─────────────────────────────────────────────────────────────────
 kill_port() { lsof -ti:"$1" | xargs kill -9 2>/dev/null || true; }
 
 wait_for() {
@@ -20,7 +19,6 @@ wait_for() {
   echo "ERROR: $url not reachable after ${timeout}s" >&2; return 1
 }
 
-# ── Stop ────────────────────────────────────────────────────────────────────
 stop() {
   echo "Stopping…"
   kill_port $SERVER_PORT
@@ -29,7 +27,6 @@ stop() {
   echo "Stopped."
 }
 
-# ── Start ───────────────────────────────────────────────────────────────────
 start() {
   stop
 
@@ -73,7 +70,6 @@ start() {
   echo "  tail -f logs/debate.log          # live debate turns + RAG chunks"
 }
 
-# ── CLI ─────────────────────────────────────────────────────────────────────
 case "${1:-start}" in
   start)   start "${2:-}" ;;
   stop)    stop ;;

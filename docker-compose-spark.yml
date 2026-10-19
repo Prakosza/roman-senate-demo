@@ -1,13 +1,13 @@
-# ── DGX Spark local model serving ─────────────────────────────────────
+# DGX Spark local model serving
 # This overlay adds llama.cpp-served LLM and embedding models matching
 # the NVIDIA DGX Spark Playbooks "multi-agent-chatbot" configuration.
 #
 # Models used (from the playbook):
-#   LLM:       gpt-oss-120b  (MXFP4 GGUF, ~63 GB)  — or gpt-oss-20b (~11 GB)
+#   LLM:       gpt-oss-120b  (MXFP4 GGUF, ~63 GB), or gpt-oss-20b (~11 GB)
 #   Embedding: Qwen3-Embedding-4B (Q8 GGUF, ~4 GB)
 #
 # Usage:
-#   # 1. Download model files (see model_download.sh or manually):
+#   # 1. Download the model files:
 #   #    mkdir -p models && cd models
 #   #    huggingface-cli download nvidia/gpt-oss-120b-MXFP4-GGUF  --include "*.gguf" --local-dir .
 #   #    huggingface-cli download Qwen/Qwen3-Embedding-4B-GGUF    --include "*Q8_0.gguf" --local-dir .
@@ -17,8 +17,6 @@
 #
 # The senate-server and gradio-ui from the base docker-compose.yml will
 # automatically connect to the local model containers via the env vars below.
-# ──────────────────────────────────────────────────────────────────────
-
 x-build-llamacpp: &build-llamacpp
   build:
     context: .
@@ -26,7 +24,7 @@ x-build-llamacpp: &build-llamacpp
   image: local/llama.cpp:server-cuda
 
 services:
-  # ── Chat LLM: GPT-OSS-120B (default) ──────────────────────────────
+  # Chat LLM: GPT-OSS-120B (default)
   # Requires ~64 GB VRAM.  For smaller setups, comment this out and
   # uncomment the gpt-oss-20b block below.
   gpt-oss-120b:
@@ -60,7 +58,7 @@ services:
       retries: 5
       start_period: 120s
 
-  # ── Chat LLM: GPT-OSS-20B (lighter alternative) ───────────────────
+  # Chat LLM: GPT-OSS-20B (lighter alternative)
   # Uncomment this and comment the 120B block above to use ~11 GB instead.
   # gpt-oss-20b:
   #   <<: *build-llamacpp
@@ -93,7 +91,7 @@ services:
   #     retries: 5
   #     start_period: 60s
 
-  # ── Embedding model: Qwen3-Embedding-4B ────────────────────────────
+  # Embedding model: Qwen3-Embedding-4B
   qwen3-embedding:
     <<: *build-llamacpp
     container_name: qwen3-embedding
@@ -122,7 +120,7 @@ services:
       retries: 5
       start_period: 60s
 
-  # ── Override senate-server to point at local model containers ──────
+  # Override senate-server to point at local model containers
   senate-server:
     environment:
       LLM_API_KEY: "not-needed"

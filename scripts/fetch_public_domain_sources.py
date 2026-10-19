@@ -7,9 +7,9 @@ Safe fallback: if download fails, keep local authored samples.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence
 
 import httpx
 
@@ -43,7 +43,7 @@ class OutputSpec:
     max_chars: int | None = None
 
 
-DOWNLOAD_PLAN: Dict[str, List[OutputSpec]] = {
+DOWNLOAD_PLAN: dict[str, list[OutputSpec]] = {
     # Julius Caesar, "De Bello Gallico" + "Civil War" (English translation)
     "https://www.gutenberg.org/ebooks/10657.txt.utf-8": [
         OutputSpec(
@@ -209,7 +209,7 @@ def _extract_keyword_passages(text: str, keywords: Sequence[str], context_paragr
 
 
 def _strip_obvious_noise(text: str) -> str:
-    out_lines: List[str] = []
+    out_lines: list[str] = []
     for line in text.splitlines():
         s = line.strip()
         if not s:
@@ -232,7 +232,7 @@ def _dedupe_repeated_paragraphs(text: str, min_chars: int = 180) -> str:
         return text
 
     seen: set[str] = set()
-    kept: List[str] = []
+    kept: list[str] = []
     for paragraph in paragraphs:
         normalized = " ".join(paragraph.split()).lower()
         if len(normalized) < min_chars:
@@ -280,7 +280,7 @@ def _dedupe_across_collection(collection_dir: Path, min_chars: int = 220) -> Non
     for file in sorted(collection_dir.glob("*.txt")):
         text = file.read_text(encoding="utf-8", errors="ignore")
         paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
-        kept: List[str] = []
+        kept: list[str] = []
         removed = 0
         for paragraph in paragraphs:
             normalized = " ".join(paragraph.split()).lower()
@@ -300,7 +300,7 @@ def _dedupe_across_collection(collection_dir: Path, min_chars: int = 220) -> Non
 
 
 if __name__ == "__main__":
-    downloaded: Dict[str, str] = {}
+    downloaded: dict[str, str] = {}
     with httpx.Client(
         timeout=90.0,
         follow_redirects=True,
